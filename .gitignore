@@ -1,2 +1,5 @@
 .env
 simulation/output/
+
+__pycache__/
+*.py[cod]
