@@ -16,7 +16,6 @@ meshroom/input/
 meshroom/output/
 
 # gauss_splat
-gauss_splat/input/
 gauss_splat/output/
 
 # simulation generated assets
