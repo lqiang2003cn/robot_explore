@@ -112,6 +112,30 @@ log "Components to set up: ${COMPONENTS[*]}"
 [[ "$DRY_RUN" == true ]] && log "Mode: DRY RUN (no changes will be made)"
 echo ""
 
+# ── GitHub CLI ─────────────────────────────────────────────────
+install_gh_cli() {
+  if command -v gh &>/dev/null; then
+    ok "GitHub CLI already installed ($(gh --version | head -1))"
+    return 0
+  fi
+
+  log "Installing GitHub CLI..."
+  if [[ "$DRY_RUN" == true ]]; then
+    log "  Would install gh via apt"
+    return 0
+  fi
+
+  if apt-get update -qq && apt-get install -y -qq gh; then
+    ok "GitHub CLI installed ($(gh --version | head -1))"
+  else
+    err "Failed to install GitHub CLI"
+    return 1
+  fi
+}
+
+install_gh_cli
+echo ""
+
 # ── System-level dependencies for Isaac Sim RTX renderer ──────
 install_system_deps() {
   local pkgs=(
