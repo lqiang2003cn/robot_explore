@@ -4,4 +4,5 @@ Trellis (Microsoft)	1-4 images	~10-15s	Yes, .glb/.obj	High quality, handles dive
 CRM (Convolutional Reconstruction Model)	6 canonical views	~10s	Yes, .obj	Explicit multi-view, no guessing
 Wonder3D	1 image → generates 6 views → reconstructs	~2-3 min	Yes, .obj	Cross-domain diffusion for novel views
 Era3D	1 image → generates multi-view → reconstructs	~1-2 min	Yes, .obj	Better multi-view consistency
-3D Gaussian Splatting + SuGaR/2DGS	Multi-view (10-50 images)	5-15 min	Yes (mesh extraction)	Uses ALL your photos, high fidelity
+COLMAP (SfM)	Multi-view (10-50+ images)	Very slow (often dominates runtime; scales ~O(n²) matching)	Sparse point cloud + cameras, not a mesh	Industry-standard poses; bottleneck before splat/NeRF training
+3D Gaussian Splatting + SuGaR/2DGS	Multi-view (10-50 images)	5-15 min total (plus COLMAP time above)	Yes (mesh extraction)	Uses ALL your photos, high fidelity
