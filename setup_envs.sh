@@ -7,9 +7,6 @@ cd "$SCRIPT_DIR"
 # ── Component order (explicit for dependency control) ──────────
 COMPONENTS=(
   simulation
-  perception
-  planning
-  analysis
 )
 
 # ── Options ────────────────────────────────────────────────────
@@ -36,7 +33,6 @@ Otherwise all components are set up.
 
 Examples:
   $(basename "$0")                     # set up everything
-  $(basename "$0") perception planning # set up only these two
   $(basename "$0") --clean simulation  # recreate simulation env
 EOF
   exit 0
@@ -208,13 +204,13 @@ setup_env() {
 
   if [[ "$CLEAN" == true && "$env_exists" == true ]]; then
     log "  Removing existing env '$env_name'..."
-    conda env remove -n "$env_name" -y 2>&1 | tail -1
+    conda env remove -n "$env_name" -y
     env_exists=false
   fi
 
   if [[ "$env_exists" == true ]]; then
     log "  Updating existing env '$env_name'..."
-    if conda env update -f "$yml" --prune 2>&1 | tail -5; then
+    if conda env update -f "$yml" --prune; then
       ok "$env_name updated"
     else
       err "$env_name update FAILED"
@@ -222,7 +218,7 @@ setup_env() {
     fi
   else
     log "  Creating env '$env_name'..."
-    if conda env create -f "$yml" 2>&1 | tail -5; then
+    if conda env create -f "$yml"; then
       ok "$env_name created"
     else
       err "$env_name creation FAILED"

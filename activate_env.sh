@@ -6,7 +6,7 @@
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: source activate_env.sh <component>"
-  echo "Available: perception  planning  simulation  analysis"
+  echo "Available: simulation"
   return 1 2>/dev/null || exit 1
 fi
 

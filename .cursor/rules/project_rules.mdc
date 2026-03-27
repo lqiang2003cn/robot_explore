@@ -5,30 +5,20 @@ alwaysApply: true
 
 Keep this file compact and always under 120 lines.
 
-When adding a new component, also add its name to the COMPONENTS array in setup_envs.sh.
-
 # Project Structure
 
-Each component lives in its own top-level directory with a self-contained conda environment:
+The project currently contains a single component — `simulation`:
 
 ```
-<component>/
-  environment.yml    # conda env definition (required — name, python version, conda deps)
-  post_install.sh    # optional post-env-creation hook (pip installs, etc.)
-  config.yml         # optional runtime config
+simulation/
+  environment.yml    # conda env definition (Python 3.12)
+  post_install.sh    # installs Isaac Sim 6.0.0 from NVIDIA PyPI
+  config.yml         # simulation parameters
   src/               # source code
 ```
-
-## Adding a New Component
-
-1. Create the directory with at least `environment.yml` (set a unique `name:` field).
-2. Add the component name to the `COMPONENTS` array in `setup_envs.sh` (order matters for dependencies).
-3. If pip packages are needed, create `post_install.sh` (`set -euo pipefail`, use `pip install`).
-4. Run `./setup_envs.sh <component>` to build only that env, or `./setup_envs.sh` for all.
-5. Activate with `source activate_env.sh <component>`.
 
 ## Simulation Component
 
 - Isaac Sim 6.0.0 is installed via `post_install.sh`, not conda.
-- System deps (`libglu1-mesa`, `libxt6`) are auto-installed by `setup_envs.sh` when simulation is in the component list.
+- System deps (`libglu1-mesa`, `libxt6`) are auto-installed by `setup_envs.sh`.
 - Run pick-and-place: `source activate_env.sh simulation && python -m src.pick_and_place`.
