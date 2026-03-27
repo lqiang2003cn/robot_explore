@@ -1,0 +1,12 @@
+pipeline: photogrammetryObject
+version: 2025.1.0
+
+input_dir: input
+output_dir: output
+
+defaults:
+  texture_downscale: 2
+  mesh_decimation_factor: 0.5
+  force_compute: false
+  prompt: ""
+  force_detection: true

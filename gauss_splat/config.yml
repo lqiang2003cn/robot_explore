@@ -1,0 +1,13 @@
+input_dir: input
+output_dir: output
+
+defaults:
+  max_iterations: 7000
+  target_faces: 50000
+  force_compute: false
+
+segmentation:
+  gdino_model: "IDEA-Research/grounding-dino-base"
+  sam2_model: "facebook/sam2.1-hiera-large"
+  box_threshold: 0.35
+  text_threshold: 0.25

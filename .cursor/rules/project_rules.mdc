@@ -7,7 +7,7 @@ Keep this file compact and always under 120 lines.
 
 # Project Structure
 
-The project contains two components — `simulation` and `ros2_stack`:
+The project contains four components — `simulation`, `ros2_stack`, `meshroom`, and `gauss_splat`:
 
 ```
 simulation/
@@ -22,7 +22,27 @@ ros2_stack/
     src/
       panda_pick_place/   # custom ROS 2 Python package
       topic_based_ros2_control/  # cloned at setup time (gitignored)
+
+meshroom/
+  config.yml         # reconstruction pipeline parameters + version
+  src/               # source code (reconstruct.py wrapper)
+  input/             # place image sets here (gitignored)
+  output/            # reconstruction results (gitignored)
+  Meshroom-<version>/ # prebuilt binary (Zenodo, via setup_envs.sh, gitignored)
+
+gauss_splat/
+  environment.yml    # conda env definition (Python 3.11)
+  post_install.sh    # installs PyTorch + nerfstudio
+  config.yml         # reconstruction parameters
+  src/               # source code (reconstruct.py wrapper)
+  input/             # place image sets here (gitignored)
+  output/            # reconstruction results (gitignored)
 ```
+
+## Dependency Placement
+
+- Components with a conda env (e.g. `simulation`, `gauss_splat`): add Python/pip/conda deps to that component's `environment.yml`.
+- Components without a conda env (e.g. `ros2_stack`, `meshroom`) and system-level packages: add deps to `setup_envs.sh`.
 
 ## Simulation Component
 
@@ -38,6 +58,29 @@ ros2_stack/
 - `topic_based_ros2_control` is cloned and built in the colcon workspace.
 - Uses MoveIt2 for motion planning, py_trees for BT orchestration.
 - Run: `source activate_env.sh ros2_stack && ros2 launch panda_pick_place pick_place.launch.py`.
+
+## Meshroom Component
+
+- No conda env — uses prebuilt Meshroom (CUDA 12; version in `meshroom/config.yml`, URL auto-resolved from GitHub release).
+- Default pipeline `photogrammetryObject` uses Grounding DINO + SAM for object detection/segmentation before reconstruction.
+- `reconstruct.py` wraps `meshroom_batch` with a dual interface (function + CLI).
+- Pass `--prompt "description"` to specify the target object; defaults to the object name.
+- Other components call it via subprocess to maintain environment isolation.
+- Reconstruct: `source activate_env.sh meshroom && python -m src.reconstruct --name <object> --prompt "description"`.
+- Import into Isaac Sim: `source activate_env.sh simulation && python -m src.import_mesh --name <object>`.
+
+## Gauss Splat Component
+
+- Uses conda env (`roboex-gauss-splat`, Python 3.11) + nerfstudio (installed via `post_install.sh`).
+- COLMAP installed as system package by `setup_envs.sh`.
+- Pipeline: COLMAP SfM → splatfacto training → TSDF mesh extraction.
+- Pass `--prompt "description"` to enable GDINO + SAM2 object segmentation before reconstruction.
+  SAM2 video tracking propagates masks across all frames for temporally consistent results.
+- Multi-view input (10-50 images) or video; ~5-15 min total vs 30-60 for Meshroom.
+- Full-scene reconstruct: `source activate_env.sh gauss_splat && python -m src.reconstruct --name <object>`.
+- Object-only reconstruct: `source activate_env.sh gauss_splat && python -m src.reconstruct --name <object> --prompt "description"`.
+- Segment only: `source activate_env.sh gauss_splat && python -m src.segment --name <object> --prompt "description"`.
+- Import into Isaac Sim: `source activate_env.sh simulation && python -m src.import_mesh --name <object> --source gauss_splat`.
 
 ## Running the ROS2 Pick-and-Place Demo
 

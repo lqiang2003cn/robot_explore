@@ -8,6 +8,8 @@ cd "$SCRIPT_DIR"
 COMPONENTS=(
   simulation
   ros2_stack
+  meshroom
+  gauss_splat
 )
 
 # ── Options ────────────────────────────────────────────────────
@@ -187,6 +189,36 @@ done
 unset _comp
 echo ""
 
+# ── COLMAP (required by gauss_splat for SfM) ─────────────────
+install_colmap() {
+  if command -v colmap &>/dev/null; then
+    ok "COLMAP already installed ($(colmap -h 2>&1 | head -1 || echo 'found'))"
+    return 0
+  fi
+
+  log "Installing COLMAP..."
+  if [[ "$DRY_RUN" == true ]]; then
+    log "  Would install colmap via apt"
+    return 0
+  fi
+
+  if apt-get update -qq && apt-get install -y -qq colmap; then
+    ok "COLMAP installed"
+  else
+    err "Failed to install COLMAP"
+    return 1
+  fi
+}
+
+for _comp in "${COMPONENTS[@]}"; do
+  if [[ "$_comp" == "gauss_splat" ]]; then
+    install_colmap
+    break
+  fi
+done
+unset _comp
+echo ""
+
 # ── ROS 2 Jazzy + robotics stack ──────────────────────────────
 install_ros2_jazzy() {
   if [[ -f /opt/ros/jazzy/setup.bash ]]; then
@@ -270,6 +302,87 @@ done
 unset _comp
 echo ""
 
+# ── Meshroom (AliceVision photogrammetry) ─────────────────────
+# Version is read from meshroom/config.yml (single source of truth).
+# The Linux binary is hosted on Zenodo; the download URL is resolved
+# dynamically from the GitHub release notes so that changing the version
+# in config.yml is all that's needed for an upgrade.
+MESHROOM_CONFIG="$SCRIPT_DIR/meshroom/config.yml"
+MESHROOM_VERSION=$(grep '^version:' "$MESHROOM_CONFIG" 2>/dev/null | awk '{print $2}' | tr -d '"'"'")
+if [[ -z "$MESHROOM_VERSION" ]]; then
+  warn "meshroom/config.yml missing 'version:' — falling back to 2025.1.0"
+  MESHROOM_VERSION="2025.1.0"
+fi
+MESHROOM_DIR="$SCRIPT_DIR/meshroom/Meshroom-${MESHROOM_VERSION}"
+
+resolve_meshroom_url() {
+  local version="$1"
+  local api_url="https://api.github.com/repos/alicevision/Meshroom/releases/tags/v${version}"
+  curl -fsSL "$api_url" 2>/dev/null \
+    | grep -oP 'https://zenodo\.org/records/[0-9]+/files/Meshroom-[^"]*-Linux\.tar\.gz' \
+    | head -1
+}
+
+install_meshroom() {
+  if [[ -d "$MESHROOM_DIR" ]]; then
+    ok "Meshroom ${MESHROOM_VERSION} already installed at $MESHROOM_DIR"
+    return 0
+  fi
+
+  log "Installing Meshroom ${MESHROOM_VERSION}..."
+
+  if [[ "$DRY_RUN" == true ]]; then
+    log "  Would download and extract Meshroom-${MESHROOM_VERSION}-Linux.tar.gz"
+    return 0
+  fi
+
+  if [[ "$CLEAN" == true && -d "$MESHROOM_DIR" ]]; then
+    log "  Removing existing Meshroom installation..."
+    rm -rf "$MESHROOM_DIR"
+  fi
+
+  log "  Resolving download URL from GitHub release v${MESHROOM_VERSION}..."
+  local download_url
+  download_url=$(resolve_meshroom_url "$MESHROOM_VERSION")
+
+  if [[ -z "$download_url" ]]; then
+    err "Could not resolve download URL for Meshroom ${MESHROOM_VERSION}"
+    err "Verify the release exists: https://github.com/alicevision/Meshroom/releases/tag/v${MESHROOM_VERSION}"
+    return 1
+  fi
+
+  ok "Resolved URL: $download_url"
+
+  local tarball
+  tarball=$(basename "$download_url")
+  local dest="$SCRIPT_DIR/meshroom"
+  local tarball_path="$dest/${tarball}"
+
+  mkdir -p "$dest"
+  log "  Downloading ${tarball} (very large; curl -C supports resume) ..."
+  curl -fSL --retry 3 --retry-delay 10 -C - -o "$tarball_path" "$download_url"
+
+  log "  Extracting to ${dest} ..."
+  tar -xzf "$tarball_path" -C "$dest"
+  rm -f "$tarball_path"
+
+  if [[ -d "$MESHROOM_DIR" ]]; then
+    ok "Meshroom ${MESHROOM_VERSION} installed at $MESHROOM_DIR"
+  else
+    err "Meshroom extraction failed — expected directory $MESHROOM_DIR not found"
+    return 1
+  fi
+}
+
+for _comp in "${COMPONENTS[@]}"; do
+  if [[ "$_comp" == "meshroom" ]]; then
+    install_meshroom
+    break
+  fi
+done
+unset _comp
+echo ""
+
 # ── Build ros2_stack colcon workspace ─────────────────────────
 setup_ros2_stack() {
   log "━━━ ros2_stack ━━━  (native, no conda env)"
@@ -314,6 +427,44 @@ setup_ros2_stack() {
 
   cd "$SCRIPT_DIR"
   return 0
+}
+
+# ── Setup meshroom (no conda env — self-contained binary) ─────
+setup_meshroom() {
+  log "━━━ meshroom ━━━  (prebuilt binary, no conda env)"
+
+  if [[ "$DRY_RUN" == true ]]; then
+    log "  Would verify Meshroom installation"
+    return 0
+  fi
+
+  if [[ ! -d "$MESHROOM_DIR" ]]; then
+    err "Meshroom not found at $MESHROOM_DIR — install_meshroom may have failed"
+    return 1
+  fi
+
+  mkdir -p "$SCRIPT_DIR/meshroom/input" "$SCRIPT_DIR/meshroom/output"
+  ok "Meshroom ${MESHROOM_VERSION} ready"
+  return 0
+}
+
+# ── Setup gauss_splat (conda env + post_install) ──────────────
+setup_gauss_splat() {
+  local comp="gauss_splat"
+  local yml="$comp/environment.yml"
+  local env_name
+  env_name=$(grep '^name:' "$yml" | awk '{print $2}')
+
+  log "━━━ gauss_splat ━━━  env=${env_name}"
+
+  if [[ "$DRY_RUN" == true ]]; then
+    log "  Would create env '$env_name' and run post_install.sh"
+    return 0
+  fi
+
+  mkdir -p "$SCRIPT_DIR/gauss_splat/input" "$SCRIPT_DIR/gauss_splat/output"
+
+  setup_env "$comp"
 }
 
 # ── Setup function ─────────────────────────────────────────────
@@ -390,6 +541,10 @@ if [[ "$PARALLEL" == true && "$DRY_RUN" == false ]]; then
   for comp in "${COMPONENTS[@]}"; do
     if [[ "$comp" == "ros2_stack" ]]; then
       setup_ros2_stack &
+    elif [[ "$comp" == "meshroom" ]]; then
+      setup_meshroom &
+    elif [[ "$comp" == "gauss_splat" ]]; then
+      setup_gauss_splat &
     else
       setup_env "$comp" &
     fi
@@ -406,6 +561,18 @@ else
   for comp in "${COMPONENTS[@]}"; do
     if [[ "$comp" == "ros2_stack" ]]; then
       if setup_ros2_stack; then
+        SUCCEEDED+=("$comp")
+      else
+        FAILED+=("$comp")
+      fi
+    elif [[ "$comp" == "meshroom" ]]; then
+      if setup_meshroom; then
+        SUCCEEDED+=("$comp")
+      else
+        FAILED+=("$comp")
+      fi
+    elif [[ "$comp" == "gauss_splat" ]]; then
+      if setup_gauss_splat; then
         SUCCEEDED+=("$comp")
       else
         FAILED+=("$comp")
@@ -438,8 +605,8 @@ fi
 echo ""
 log "All environments ready. Activate with:"
 for comp in "${SUCCEEDED[@]}"; do
-  if [[ "$comp" == "ros2_stack" ]]; then
-    echo "  source activate_env.sh ros2_stack"
+  if [[ "$comp" == "ros2_stack" || "$comp" == "meshroom" ]]; then
+    echo "  source activate_env.sh $comp"
   elif [[ -f "$comp/environment.yml" ]]; then
     local_name=$(grep '^name:' "$comp/environment.yml" | awk '{print $2}')
     echo "  conda activate $local_name"

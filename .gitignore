@@ -9,3 +9,15 @@ ros2_stack/ws/build/
 ros2_stack/ws/install/
 ros2_stack/ws/log/
 ros2_stack/ws/src/topic_based_ros2_control/
+
+# meshroom
+meshroom/Meshroom-*/
+meshroom/input/
+meshroom/output/
+
+# gauss_splat
+gauss_splat/input/
+gauss_splat/output/
+
+# simulation generated assets
+simulation/assets/

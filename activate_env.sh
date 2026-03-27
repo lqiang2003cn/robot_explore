@@ -6,7 +6,7 @@
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: source activate_env.sh <component>"
-  echo "Available: simulation, ros2_stack"
+  echo "Available: simulation, ros2_stack, meshroom, gauss_splat"
   return 1 2>/dev/null || exit 1
 fi
 
@@ -26,6 +26,25 @@ if [[ "$COMP" == "ros2_stack" ]]; then
   fi
   cd "$SCRIPT_DIR/ros2_stack"
   echo "Sourced ROS 2 Jazzy + workspace — now in $(pwd)"
+  return 0 2>/dev/null || exit 0
+fi
+
+# meshroom uses a prebuilt binary, not conda
+if [[ "$COMP" == "meshroom" ]]; then
+  MESHROOM_VERSION=$(grep '^version:' "$SCRIPT_DIR/meshroom/config.yml" 2>/dev/null | awk '{print $2}' | tr -d '"'"'")
+  if [[ -z "$MESHROOM_VERSION" ]]; then
+    echo "Error: meshroom/config.yml must contain 'version: X.Y.Z'"
+    return 1 2>/dev/null || exit 1
+  fi
+  MESHROOM_DIR="$SCRIPT_DIR/meshroom/Meshroom-${MESHROOM_VERSION}"
+  if [[ ! -d "$MESHROOM_DIR" ]]; then
+    echo "Error: Meshroom not found at $MESHROOM_DIR. Run ./setup_envs.sh meshroom first."
+    return 1 2>/dev/null || exit 1
+  fi
+  export PATH="$MESHROOM_DIR:$PATH"
+  export ALICEVISION_SENSOR_DB="$MESHROOM_DIR/aliceVision/share/aliceVision/cameraSensors.db"
+  cd "$SCRIPT_DIR/meshroom"
+  echo "Meshroom ${MESHROOM_VERSION} on PATH — now in $(pwd)"
   return 0 2>/dev/null || exit 0
 fi
 
