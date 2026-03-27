@@ -102,11 +102,14 @@ fi
 
 eval "$(conda shell.bash hook)"
 
-# Miniconda 26.x ships with 'defaults' channels that require ToS acceptance.
-# Overwrite .condarc to use only conda-forge.
+# Miniconda 26.x ships with 'defaults' channels (pkgs/main, pkgs/r) that
+# require interactive ToS acceptance. Purge all condarc files and write a
+# clean one that uses only conda-forge.
+find "$(conda info --base)" -name ".condarc" -o -name "condarc" 2>/dev/null | xargs rm -f 2>/dev/null || true
 cat > "$HOME/.condarc" << 'CONDARC'
 channels:
   - conda-forge
+default_channels: []
 auto_activate_base: false
 CONDARC
 
