@@ -102,6 +102,11 @@ fi
 
 eval "$(conda shell.bash hook)"
 
+# Miniconda 26.x ships with 'defaults' channels that require ToS acceptance.
+# Remove them and use only conda-forge.
+conda config --remove channels defaults 2>/dev/null || true
+conda config --add channels conda-forge 2>/dev/null || true
+
 log "conda found: $(conda --version)"
 log "Components to set up: ${COMPONENTS[*]}"
 [[ "$CLEAN" == true ]] && log "Mode: CLEAN (environments will be removed and recreated)"
