@@ -1,0 +1,12 @@
+world_size: [20.0, 20.0]
+time_step: 0.016667   # 1/60 — Isaac Sim default physics step
+max_steps: 10000
+headless: true
+renderer: RayTracedLighting
+robot:
+  usd_path: /Isaac/Robots/Carter/carter_v2.usd
+  start_position: [1.0, 1.0, 0.0]
+  goal_position: [18.0, 18.0, 0.0]
+obstacles:
+  random_count: 15
+  seed: 42
