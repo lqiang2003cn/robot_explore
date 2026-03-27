@@ -103,9 +103,12 @@ fi
 eval "$(conda shell.bash hook)"
 
 # Miniconda 26.x ships with 'defaults' channels that require ToS acceptance.
-# Remove them and use only conda-forge.
-conda config --remove channels defaults 2>/dev/null || true
-conda config --add channels conda-forge 2>/dev/null || true
+# Overwrite .condarc to use only conda-forge.
+cat > "$HOME/.condarc" << 'CONDARC'
+channels:
+  - conda-forge
+auto_activate_base: false
+CONDARC
 
 log "conda found: $(conda --version)"
 log "Components to set up: ${COMPONENTS[*]}"
