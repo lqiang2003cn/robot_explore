@@ -71,8 +71,6 @@ def generate_launch_description() -> LaunchDescription:
 
     # ── Controllers config ────────────────────────────────────────────────
     controllers_yaml_path = os.path.join(pkg_share, "config", "controllers.yaml")
-    with open(controllers_yaml_path, "r") as f:
-        controllers_yaml = yaml.safe_load(f)
 
     # ── MoveIt2 planning pipeline ─────────────────────────────────────────
     ompl_yaml_path = os.path.join(panda_moveit_pkg, "config", "ompl_planning.yaml")
@@ -136,7 +134,7 @@ def generate_launch_description() -> LaunchDescription:
     controller_manager = Node(
         package="controller_manager",
         executable="ros2_control_node",
-        parameters=[robot_description, controllers_yaml],
+        parameters=[robot_description, controllers_yaml_path],
         output="screen",
     )
 
@@ -186,7 +184,7 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     delayed_spawners = TimerAction(
-        period=3.0,
+        period=5.0,
         actions=[
             spawn_joint_state_broadcaster,
             spawn_arm_controller,
@@ -195,12 +193,12 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     delayed_move_group = TimerAction(
-        period=8.0,
+        period=12.0,
         actions=[move_group_node],
     )
 
     delayed_pick_place = TimerAction(
-        period=15.0,
+        period=20.0,
         actions=[pick_place_node],
     )
 
