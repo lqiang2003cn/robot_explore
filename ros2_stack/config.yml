@@ -1,0 +1,9 @@
+# ROS2 stack configuration for Franka pick-and-place demo
+cube_position: [0.4, 0.12, 0.45]
+place_position: [0.4, -0.25, 0.45]
+
+grasp_offset_z: 0.04       # approach height above object
+gripper_open: 0.04          # finger joint position when open
+gripper_closed: 0.001       # finger joint position when closed
+settle_time: 0.5            # seconds to wait after gripper action
+lift_height: 0.15           # how high to lift after grasping

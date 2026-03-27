@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>panda_pick_place</name>
+  <version>0.1.0</version>
+  <description>ROS2-driven Franka Panda pick-and-place using MoveIt2, ros2_control, and BehaviorTree</description>
+  <maintainer email="dev@robot-explore.local">robot_explore</maintainer>
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>moveit_msgs</depend>
+  <depend>moveit_resources_panda_moveit_config</depend>
+  <depend>moveit_resources_panda_description</depend>
+  <depend>controller_manager</depend>
+  <depend>joint_trajectory_controller</depend>
+  <depend>joint_state_broadcaster</depend>
+  <depend>robot_state_publisher</depend>
+  <depend>topic_based_ros2_control</depend>
+  <depend>xacro</depend>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

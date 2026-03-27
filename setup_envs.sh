@@ -7,6 +7,7 @@ cd "$SCRIPT_DIR"
 # ── Component order (explicit for dependency control) ──────────
 COMPONENTS=(
   simulation
+  ros2_stack
 )
 
 # ── Options ────────────────────────────────────────────────────
@@ -186,6 +187,135 @@ done
 unset _comp
 echo ""
 
+# ── ROS 2 Jazzy + robotics stack ──────────────────────────────
+install_ros2_jazzy() {
+  if [[ -f /opt/ros/jazzy/setup.bash ]]; then
+    ok "ROS 2 Jazzy already installed"
+  else
+    log "Installing ROS 2 Jazzy and robotics stack..."
+
+    if [[ "$DRY_RUN" == true ]]; then
+      log "  Would install ROS 2 Jazzy + ros2_control + MoveIt2 + BehaviorTree.CPP"
+      return 0
+    fi
+
+    apt-get update -qq
+    apt-get install -y -qq software-properties-common curl
+
+    # ROS 2 GPG key + repository
+    curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+      | gpg --dearmor -o /usr/share/keyrings/ros-archive-keyring.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
+      http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo "$UBUNTU_CODENAME") main" \
+      > /etc/apt/sources.list.d/ros2.list
+
+    apt-get update -qq
+
+    # Core ROS 2 desktop
+    apt-get install -y -qq ros-jazzy-desktop
+
+    ok "ROS 2 Jazzy base installed"
+  fi
+
+  # Robotics stack packages
+  local stack_pkgs=(
+    ros-jazzy-ros2-control
+    ros-jazzy-ros2-controllers
+    ros-jazzy-moveit
+    ros-jazzy-moveit-py
+    ros-jazzy-moveit-resources-panda-moveit-config
+    ros-jazzy-moveit-resources-panda-description
+    ros-jazzy-behaviortree-cpp
+    ros-jazzy-simulation-interfaces
+    ros-jazzy-ros-testing
+    python3-colcon-common-extensions
+  )
+
+  local missing=()
+  for pkg in "${stack_pkgs[@]}"; do
+    if ! dpkg -s "$pkg" &>/dev/null; then
+      missing+=("$pkg")
+    fi
+  done
+
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    ok "ROS 2 robotics stack already installed"
+  elif [[ "$DRY_RUN" == true ]]; then
+    log "  Would install: ${missing[*]}"
+  else
+    log "Installing ROS 2 stack packages: ${missing[*]}"
+    apt-get install -y -qq "${missing[@]}"
+    ok "ROS 2 robotics stack installed"
+  fi
+
+  # py_trees for Python BehaviorTree orchestration
+  if python3 -c "import py_trees" &>/dev/null; then
+    ok "py_trees already installed"
+  elif [[ "$DRY_RUN" == true ]]; then
+    log "  Would pip-install py_trees"
+  else
+    log "Installing py_trees..."
+    pip install --break-system-packages py_trees
+    ok "py_trees installed"
+  fi
+}
+
+# Only install ROS 2 when the ros2_stack component is requested
+for _comp in "${COMPONENTS[@]}"; do
+  if [[ "$_comp" == "ros2_stack" ]]; then
+    install_ros2_jazzy
+    break
+  fi
+done
+unset _comp
+echo ""
+
+# ── Build ros2_stack colcon workspace ─────────────────────────
+setup_ros2_stack() {
+  log "━━━ ros2_stack ━━━  (native, no conda env)"
+
+  if [[ "$DRY_RUN" == true ]]; then
+    log "  Would build ros2_stack colcon workspace"
+    return 0
+  fi
+
+  # ROS 2 setup scripts reference variables that may be unset
+  set +u
+  source /opt/ros/jazzy/setup.bash
+  set -u
+
+  local ws_dir="$SCRIPT_DIR/ros2_stack/ws"
+  local src_dir="$ws_dir/src"
+  mkdir -p "$src_dir"
+
+  # Clone topic_based_ros2_control if not present
+  if [[ ! -d "$src_dir/topic_based_ros2_control" ]]; then
+    log "  Cloning topic_based_ros2_control..."
+    git clone https://github.com/PickNikRobotics/topic_based_ros2_control.git \
+      "$src_dir/topic_based_ros2_control"
+    ok "topic_based_ros2_control cloned"
+  else
+    ok "topic_based_ros2_control already present"
+  fi
+
+  if [[ "$CLEAN" == true ]]; then
+    log "  Cleaning previous build..."
+    rm -rf "$ws_dir/build" "$ws_dir/install" "$ws_dir/log"
+  fi
+
+  log "  Building colcon workspace..."
+  cd "$ws_dir"
+  if colcon build; then
+    ok "ros2_stack workspace built"
+  else
+    err "ros2_stack build FAILED"
+    return 1
+  fi
+
+  cd "$SCRIPT_DIR"
+  return 0
+}
+
 # ── Setup function ─────────────────────────────────────────────
 setup_env() {
   local comp="$1"
@@ -258,7 +388,11 @@ if [[ "$PARALLEL" == true && "$DRY_RUN" == false ]]; then
   log "Running in parallel mode..."
   pids=()
   for comp in "${COMPONENTS[@]}"; do
-    setup_env "$comp" &
+    if [[ "$comp" == "ros2_stack" ]]; then
+      setup_ros2_stack &
+    else
+      setup_env "$comp" &
+    fi
     pids+=($!)
   done
   for i in "${!pids[@]}"; do
@@ -270,10 +404,18 @@ if [[ "$PARALLEL" == true && "$DRY_RUN" == false ]]; then
   done
 else
   for comp in "${COMPONENTS[@]}"; do
-    if setup_env "$comp"; then
-      SUCCEEDED+=("$comp")
+    if [[ "$comp" == "ros2_stack" ]]; then
+      if setup_ros2_stack; then
+        SUCCEEDED+=("$comp")
+      else
+        FAILED+=("$comp")
+      fi
     else
-      FAILED+=("$comp")
+      if setup_env "$comp"; then
+        SUCCEEDED+=("$comp")
+      else
+        FAILED+=("$comp")
+      fi
     fi
   done
 fi
@@ -296,6 +438,10 @@ fi
 echo ""
 log "All environments ready. Activate with:"
 for comp in "${SUCCEEDED[@]}"; do
-  local_name=$(grep '^name:' "$comp/environment.yml" | awk '{print $2}')
-  echo "  conda activate $local_name"
+  if [[ "$comp" == "ros2_stack" ]]; then
+    echo "  source activate_env.sh ros2_stack"
+  elif [[ -f "$comp/environment.yml" ]]; then
+    local_name=$(grep '^name:' "$comp/environment.yml" | awk '{print $2}')
+    echo "  conda activate $local_name"
+  fi
 done

@@ -2,16 +2,33 @@
 # Convenience wrapper: source this to activate a component's env and cd into it.
 #
 # Usage:  source activate_env.sh <component>
-# Example: source activate_env.sh planning
+# Example: source activate_env.sh simulation
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: source activate_env.sh <component>"
-  echo "Available: simulation"
+  echo "Available: simulation, ros2_stack"
   return 1 2>/dev/null || exit 1
 fi
 
 COMP="$1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ros2_stack uses native ROS 2, not conda
+if [[ "$COMP" == "ros2_stack" ]]; then
+  if [[ ! -f /opt/ros/jazzy/setup.bash ]]; then
+    echo "Error: ROS 2 Jazzy not found. Run ./setup_envs.sh ros2_stack first."
+    return 1 2>/dev/null || exit 1
+  fi
+  source /opt/ros/jazzy/setup.bash
+  local_ws="$SCRIPT_DIR/ros2_stack/ws/install/setup.bash"
+  if [[ -f "$local_ws" ]]; then
+    source "$local_ws"
+  fi
+  cd "$SCRIPT_DIR/ros2_stack"
+  echo "Sourced ROS 2 Jazzy + workspace — now in $(pwd)"
+  return 0 2>/dev/null || exit 0
+fi
+
 YML="$SCRIPT_DIR/$COMP/environment.yml"
 
 if [[ ! -f "$YML" ]]; then

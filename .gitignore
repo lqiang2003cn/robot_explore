@@ -3,3 +3,9 @@ simulation/output/
 
 __pycache__/
 *.py[cod]
+
+# ros2_stack colcon workspace artefacts
+ros2_stack/ws/build/
+ros2_stack/ws/install/
+ros2_stack/ws/log/
+ros2_stack/ws/src/topic_based_ros2_control/

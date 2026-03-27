@@ -7,7 +7,7 @@ Keep this file compact and always under 120 lines.
 
 # Project Structure
 
-The project currently contains a single component — `simulation`:
+The project contains two components — `simulation` and `ros2_stack`:
 
 ```
 simulation/
@@ -15,10 +15,31 @@ simulation/
   post_install.sh    # installs Isaac Sim 6.0.0 from NVIDIA PyPI
   config.yml         # simulation parameters
   src/               # source code
+
+ros2_stack/
+  config.yml         # pick-and-place parameters
+  ws/                # ROS 2 colcon workspace
+    src/
+      panda_pick_place/   # custom ROS 2 Python package
+      topic_based_ros2_control/  # cloned at setup time (gitignored)
 ```
 
 ## Simulation Component
 
 - Isaac Sim 6.0.0 is installed via `post_install.sh`, not conda.
 - System deps (`libglu1-mesa`, `libxt6`) are auto-installed by `setup_envs.sh`.
-- Run pick-and-place: `source activate_env.sh simulation && python -m src.pick_and_place`.
+- Run standalone pick-and-place: `source activate_env.sh simulation && python -m src.pick_and_place`.
+- Run ROS2-bridged scene: `source activate_env.sh simulation && python -m src.ros2_pick_and_place`.
+
+## ROS2 Stack Component
+
+- No conda env — uses native Ubuntu ROS 2 Jazzy packages.
+- ROS 2, ros2_control, MoveIt2, BehaviorTree.CPP installed via `setup_envs.sh`.
+- `topic_based_ros2_control` is cloned and built in the colcon workspace.
+- Uses MoveIt2 for motion planning, py_trees for BT orchestration.
+- Run: `source activate_env.sh ros2_stack && ros2 launch panda_pick_place pick_place.launch.py`.
+
+## Running the ROS2 Pick-and-Place Demo
+
+Terminal 1 (Isaac Sim): `source activate_env.sh simulation && python -m src.ros2_pick_and_place`
+Terminal 2 (ROS2):      `source activate_env.sh ros2_stack && ros2 launch panda_pick_place pick_place.launch.py`
