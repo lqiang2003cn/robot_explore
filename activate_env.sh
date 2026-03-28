@@ -6,7 +6,7 @@
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: source activate_env.sh <component>"
-  echo "Available: simulation, ros2_stack, meshroom, gauss_splat"
+  echo "Available: simulation, ros2_stack, meshroom, gauss_splat, vla_x3plus"
   return 1 2>/dev/null || exit 1
 fi
 

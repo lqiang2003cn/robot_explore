@@ -1,0 +1,13 @@
+model:
+  checkpoint: "hf://rail-berkeley/octo-small-1.5"
+  action_dim: 7       # Octo outputs (dx, dy, dz, droll, dpitch, dyaw, gripper)
+
+simulation:
+  model_path: models/x3plus_mujoco.xml
+  timestep: 0.002
+  camera_name: front_cam
+  camera_resolution: [256, 256]
+  max_episode_steps: 400
+  control_dt: 0.05    # policy query interval (20 Hz)
+
+output_dir: output

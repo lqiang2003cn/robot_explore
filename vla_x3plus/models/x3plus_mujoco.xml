@@ -1,0 +1,130 @@
+<mujoco model="x3plus_pick_and_place">
+  <compiler angle="radian"/>
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+
+  <default>
+    <joint damping="0.5" armature="0.01"/>
+    <geom condim="4" friction="1 0.5 0.01"/>
+    <position kp="50"/>
+  </default>
+
+  <asset>
+    <texture name="texplane" type="2d" builtin="checker"
+             rgb1="0.2 0.3 0.4" rgb2="0.1 0.15 0.2" width="512" height="512"/>
+    <material name="matplane" texture="texplane" texrepeat="5 5" reflectance="0.3"/>
+    <material name="mat_metal" rgba="0.6 0.6 0.65 1"/>
+    <material name="mat_arm" rgba="0.2 0.7 0.2 1"/>
+    <material name="mat_target" rgba="0.85 0.15 0.15 1"/>
+    <material name="mat_table" rgba="0.55 0.38 0.22 1"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0.3 -0.3 1.8" dir="-0.15 0.15 -1" diffuse="0.8 0.8 0.8" castshadow="true"/>
+    <light pos="-0.2 0.4 1.2" dir="0.1 -0.2 -1" diffuse="0.4 0.4 0.4"/>
+
+    <geom name="floor" type="plane" size="1.5 1.5 0.1" material="matplane"/>
+
+    <!-- Third-person camera for Octo primary observations -->
+    <camera name="front_cam" pos="0.55 -0.35 0.85"
+            xyaxes="0.5 0.866 0 -0.35 0.2 0.916" fovy="58"/>
+
+    <!-- ====== Table ====== -->
+    <body name="table" pos="0 0 0.35">
+      <geom name="table_top" type="box" size="0.3 0.3 0.02" material="mat_table" mass="20"/>
+      <geom name="leg1" type="cylinder" fromto="-0.25 -0.25 -0.35 -0.25 -0.25 -0.02" size="0.02" material="mat_table"/>
+      <geom name="leg2" type="cylinder" fromto=" 0.25 -0.25 -0.35  0.25 -0.25 -0.02" size="0.02" material="mat_table"/>
+      <geom name="leg3" type="cylinder" fromto="-0.25  0.25 -0.35 -0.25  0.25 -0.02" size="0.02" material="mat_table"/>
+      <geom name="leg4" type="cylinder" fromto=" 0.25  0.25 -0.35  0.25  0.25 -0.02" size="0.02" material="mat_table"/>
+    </body>
+
+    <!-- ====== Target cube (free body) ====== -->
+    <body name="target_cube" pos="0.15 0.0 0.39">
+      <freejoint name="cube_joint"/>
+      <geom name="cube" type="box" size="0.02 0.02 0.02" mass="0.05"
+            material="mat_target" solref="0.01 1" solimp="0.95 0.99 0.001"/>
+    </body>
+
+    <!-- ====== X3Plus arm (mounted on table surface) ======
+         Kinematic chain from original x3plus.urdf.
+         Geometries approximated with primitives (STL meshes unavailable).
+    -->
+    <body name="base_link" pos="-0.05 0 0.37">
+      <geom name="base_geom" type="box" size="0.08 0.06 0.02" material="mat_metal" mass="1.07"/>
+
+      <!-- arm_joint1: xyz="0.09825 0 0.102" axis="0 0 -1" -->
+      <body name="arm_link1" pos="0.09825 0 0.102">
+        <joint name="arm_joint1" type="hinge" axis="0 0 -1"
+               range="-1.5708 1.5708" damping="1.0"/>
+        <geom name="arm_geom1" type="cylinder" fromto="0 0 -0.01 0 0 0.0405"
+              size="0.018" material="mat_metal" mass="0.028"/>
+
+        <!-- arm_joint2: xyz="0 0 0.0405" rpy="-π/2 0 0" axis="0 0 -1" -->
+        <body name="arm_link2" pos="0 0 0.0405" euler="-1.5708 0 0">
+          <joint name="arm_joint2" type="hinge" axis="0 0 -1"
+                 range="-1.5708 1.5708" damping="1.0"/>
+          <geom name="arm_geom2" type="capsule" fromto="0 0 0 0 -0.0829 0"
+                size="0.012" material="mat_arm" mass="0.032"/>
+
+          <!-- arm_joint3: xyz="0 -0.0829 0" axis="0 0 -1" -->
+          <body name="arm_link3" pos="0 -0.0829 0">
+            <joint name="arm_joint3" type="hinge" axis="0 0 -1"
+                   range="-1.5708 1.5708" damping="1.0"/>
+            <geom name="arm_geom3" type="capsule" fromto="0 0 0 0 -0.0829 0"
+                  size="0.012" material="mat_metal" mass="0.032"/>
+
+            <!-- arm_joint4: xyz="0 -0.0829 0" axis="0 0 -1" -->
+            <body name="arm_link4" pos="0 -0.0829 0">
+              <joint name="arm_joint4" type="hinge" axis="0 0 -1"
+                     range="-1.5708 1.5708" damping="1.0"/>
+              <geom name="arm_geom4" type="capsule" fromto="0 0 0 0 -0.17455 0"
+                    size="0.01" material="mat_arm" mass="0.05"/>
+
+              <!-- Wrist camera (from URDF mono_joint on arm_link4) -->
+              <camera name="wrist_cam" pos="-0.0481 -0.05145 -0.0022"
+                      euler="1.5708 0 0" fovy="70"/>
+
+              <!-- arm_joint5: xyz="-0.00215 -0.17455 0" rpy="π/2 0 0" axis="0 0 1" -->
+              <body name="arm_link5" pos="-0.00215 -0.17455 0" euler="1.5708 0 0">
+                <joint name="arm_joint5" type="hinge" axis="0 0 1"
+                       range="-1.5708 3.14159" damping="0.5"/>
+                <geom name="arm_geom5" type="box" size="0.015 0.018 0.012"
+                      material="mat_metal" mass="0.041"/>
+
+                <!-- Right finger: grip_joint xyz="-0.0035 -0.012625 -0.0685" rpy="0 -π/2 0" axis="0 0 1" range="-1.54 0" -->
+                <body name="rlink1" pos="-0.0035 -0.012625 -0.0685" euler="0 -1.5708 0">
+                  <joint name="grip_joint" type="hinge" axis="0 0 1"
+                         range="-1.54 0" damping="0.3"/>
+                  <geom name="rfinger" type="box" size="0.025 0.004 0.003"
+                        pos="0.013 0 0" material="mat_arm" mass="0.003"/>
+                </body>
+
+                <!-- Left finger: mirrors grip_joint -->
+                <body name="llink1" pos="-0.0035 0.012375 -0.0685" euler="0 -1.5708 0">
+                  <joint name="lgrip_joint" type="hinge" axis="0 0 1"
+                         range="0 1.54" damping="0.3"/>
+                  <geom name="lfinger" type="box" size="0.025 0.004 0.003"
+                        pos="0.013 0 0" material="mat_arm" mass="0.003"/>
+                </body>
+
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <!-- Gripper coupling: left finger = -1 * right finger (parallel close/open) -->
+  <equality>
+    <joint joint1="grip_joint" joint2="lgrip_joint" polycoef="0 -1 0 0 0"/>
+  </equality>
+
+  <actuator>
+    <position name="act_joint1" joint="arm_joint1" kp="50"  ctrlrange="-1.5708 1.5708"/>
+    <position name="act_joint2" joint="arm_joint2" kp="50"  ctrlrange="-1.5708 1.5708"/>
+    <position name="act_joint3" joint="arm_joint3" kp="50"  ctrlrange="-1.5708 1.5708"/>
+    <position name="act_joint4" joint="arm_joint4" kp="50"  ctrlrange="-1.5708 1.5708"/>
+    <position name="act_joint5" joint="arm_joint5" kp="30"  ctrlrange="-1.5708 3.14159"/>
+    <position name="act_grip"   joint="grip_joint" kp="20"  ctrlrange="-1.54 0"/>
+  </actuator>
+</mujoco>

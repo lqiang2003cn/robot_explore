@@ -5,7 +5,7 @@ Robotics exploration project focused on simulation using Isaac Sim 6.0.0.
 ## Quick Start
 
 ```bash
-# Set up the simulation environment
+# Set up the default components (ros2_stack + vla_x3plus)
 ./setup_envs.sh
 
 # Recreate from scratch
@@ -29,19 +29,14 @@ source activate_env.sh simulation
 
 ```
 robot_explore/
-├── setup_envs.sh              # master setup script
+├── setup_envs.sh              # orchestrator — calls common + component setup scripts
+├── common_setup.sh            # shared helpers: Miniconda, gh CLI, conda env management
 ├── activate_env.sh            # convenience activation helper
 └── simulation/
     ├── environment.yml        # conda env spec (Python 3.12)
     ├── config.yml             # simulation parameters
-    ├── post_install.sh        # installs Isaac Sim 6.0.0 from NVIDIA PyPI
+    ├── simulation_setup.sh    # component setup (system deps + Isaac Sim)
     └── src/
         ├── sim_runner.py
         └── pick_and_place.py
 ```
-
-## Post-Install Hooks
-
-If extra setup is needed after env creation (e.g., `pip install -e .`),
-add a `post_install.sh` script in the component directory. The setup script
-will detect and run it automatically inside the conda env.

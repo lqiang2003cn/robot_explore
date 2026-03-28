@@ -18,5 +18,9 @@ meshroom/output/
 # gauss_splat
 gauss_splat/output/
 
+# vla_x3plus
+vla_x3plus/third_party/
+vla_x3plus/output/
+
 # simulation generated assets
 simulation/assets/

@@ -7,16 +7,17 @@ Keep this file compact and always under 120 lines.
 
 # Project Structure
 
-The project contains four components — `simulation`, `ros2_stack`, `meshroom`, and `gauss_splat`:
+The project contains five components — `simulation`, `ros2_stack`, `meshroom`, `gauss_splat`, and `vla_x3plus`:
 
 ```
 simulation/
-  environment.yml    # conda env definition (Python 3.12)
-  post_install.sh    # installs Isaac Sim 6.0.0 from NVIDIA PyPI
-  config.yml         # simulation parameters
-  src/               # source code
+  environment.yml        # conda env definition (Python 3.12)
+  simulation_setup.sh    # installs system deps + conda env + Isaac Sim 6.0.0
+  config.yml             # simulation parameters
+  src/                   # source code
 
 ros2_stack/
+  ros2_stack_setup.sh  # installs ROS 2 Jazzy + builds colcon workspace
   config.yml         # pick-and-place parameters
   ws/                # ROS 2 colcon workspace
     src/
@@ -24,37 +25,51 @@ ros2_stack/
       topic_based_ros2_control/  # cloned at setup time (gitignored)
 
 meshroom/
+  meshroom_setup.sh  # downloads + verifies Meshroom binary
   config.yml         # reconstruction pipeline parameters + version
   src/               # source code (reconstruct.py wrapper)
   input/             # place image sets here (gitignored)
   output/            # reconstruction results (gitignored)
-  Meshroom-<version>/ # prebuilt binary (Zenodo, via setup_envs.sh, gitignored)
+  Meshroom-<version>/ # prebuilt binary (Zenodo, gitignored)
 
 gauss_splat/
-  environment.yml    # conda env definition (Python 3.11)
-  post_install.sh    # installs PyTorch + nerfstudio
+  environment.yml        # conda env definition (Python 3.11)
+  gauss_splat_setup.sh   # installs COLMAP + conda env + PyTorch + nerfstudio
   config.yml         # reconstruction parameters
   src/               # source code (reconstruct.py wrapper)
   input/             # place image sets here (gitignored)
   output/            # reconstruction results (gitignored)
+
+vla_x3plus/
+  environment.yml        # conda env definition (Python 3.10)
+  vla_x3plus_setup.sh   # installs conda env + JAX, MuJoCo, Octo VLA
+  config.yml         # model + simulation parameters
+  src/               # source code (pick_and_place.py demo)
+  urdf/              # x3plus URDF (reference copy from monty_isaac)
+  models/            # MuJoCo MJCF scene (x3plus_mujoco.xml)
+  third_party/octo/  # cloned Octo repo (gitignored)
+  output/            # demo videos (gitignored)
 ```
+
+## Cloning Private Repos
+
+- Load `GH_TOKEN` from `.env` and use it for authenticated HTTPS clones: `git clone https://$GH_TOKEN@github.com/OWNER/REPO.git`.
 
 ## Dependency Placement
 
-- Components with a conda env (e.g. `simulation`, `gauss_splat`): add Python/pip/conda deps to that component's `environment.yml`.
-- Components without a conda env (e.g. `ros2_stack`, `meshroom`) and system-level packages: add deps to `setup_envs.sh`.
+- Components with a conda env (e.g. `simulation`, `gauss_splat`, `vla_x3plus`): add Python/pip/conda deps to that component's `environment.yml`.
+- Components without a conda env (e.g. `ros2_stack`, `meshroom`) and system-level packages: add deps to `common_setup.sh` or the component's `{name}_setup.sh`.
 
 ## Simulation Component
 
-- Isaac Sim 6.0.0 is installed via `post_install.sh`, not conda.
-- System deps (`libglu1-mesa`, `libxt6`) are auto-installed by `setup_envs.sh`.
+- Isaac Sim 6.0.0 and system deps are installed via `simulation/simulation_setup.sh`.
 - Run standalone pick-and-place: `source activate_env.sh simulation && python -m src.pick_and_place`.
 - Run ROS2-bridged scene: `source activate_env.sh simulation && python -m src.ros2_pick_and_place`.
 
 ## ROS2 Stack Component
 
 - No conda env — uses native Ubuntu ROS 2 Jazzy packages.
-- ROS 2, ros2_control, MoveIt2, BehaviorTree.CPP installed via `setup_envs.sh`.
+- ROS 2, ros2_control, MoveIt2, BehaviorTree.CPP installed via `ros2_stack/ros2_stack_setup.sh`.
 - `topic_based_ros2_control` is cloned and built in the colcon workspace.
 - Uses MoveIt2 for motion planning, py_trees for BT orchestration.
 - Run: `source activate_env.sh ros2_stack && ros2 launch panda_pick_place pick_place.launch.py`.
@@ -71,8 +86,8 @@ gauss_splat/
 
 ## Gauss Splat Component
 
-- Uses conda env (`roboex-gauss-splat`, Python 3.11) + nerfstudio (installed via `post_install.sh`).
-- COLMAP installed as system package by `setup_envs.sh`.
+- Uses conda env (`roboex-gauss-splat`, Python 3.11) + nerfstudio (installed via `gauss_splat/gauss_splat_setup.sh`).
+- COLMAP installed as system package by `gauss_splat/gauss_splat_setup.sh`.
 - Pipeline: COLMAP SfM → splatfacto training → TSDF mesh extraction.
 - Pass `--prompt "description"` to enable GDINO + SAM2 object segmentation before reconstruction.
   SAM2 video tracking propagates masks across all frames for temporally consistent results.
@@ -81,6 +96,15 @@ gauss_splat/
 - Object-only reconstruct: `source activate_env.sh gauss_splat && python -m src.reconstruct --name <object> --prompt "description"`.
 - Segment only: `source activate_env.sh gauss_splat && python -m src.segment --name <object> --prompt "description"`.
 - Import into Isaac Sim: `source activate_env.sh simulation && python -m src.import_mesh --name <object> --source gauss_splat`.
+
+## VLA X3Plus Component
+
+- Uses conda env (`roboex-vla-x3plus`, Python 3.10) + Octo VLA + MuJoCo.
+- Octo (octo-models/octo) is cloned into `third_party/octo/` by `vla_x3plus/vla_x3plus_setup.sh`.
+- MuJoCo scene (`models/x3plus_mujoco.xml`) uses primitive geometry derived from the x3plus URDF kinematic chain.
+- Original URDF kept in `urdf/` for reference; the arm has 5-DOF + parallel gripper (6 actuators).
+- Run demo (with Octo): `source activate_env.sh vla_x3plus && python -m src.pick_and_place`.
+- Run demo (random actions, no GPU): `source activate_env.sh vla_x3plus && python -m src.pick_and_place --random`.
 
 ## Running the ROS2 Pick-and-Place Demo
 
