@@ -428,23 +428,34 @@ setup_ros2_stack() {
     rm -rf "$ws_dir/build" "$ws_dir/install" "$ws_dir/log"
   fi
 
-  # Remove miniconda from PATH so colcon/CMake use the system Python
+  # Fully isolate from Miniconda so colcon/CMake use the system Python
   # (which has catkin_pkg and other ROS 2 Python deps installed).
   local _orig_path="$PATH"
   PATH=$(echo "$PATH" | tr ':' '\n' | grep -v miniconda | paste -sd:)
   hash -r
+  conda deactivate 2>/dev/null || true
+  local _saved_conda_prefix="${CONDA_PREFIX:-}"
+  local _saved_conda_exe="${CONDA_EXE:-}"
+  local _saved_conda_python="${CONDA_PYTHON_EXE:-}"
+  unset CONDA_PREFIX CONDA_EXE CONDA_PYTHON_EXE CONDA_DEFAULT_ENV
 
   log "  Building colcon workspace..."
   cd "$ws_dir"
-  if colcon build; then
+  if colcon build --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3; then
     ok "ros2_stack workspace built"
   else
     err "ros2_stack build FAILED"
     PATH="$_orig_path"; hash -r
+    [[ -n "$_saved_conda_prefix" ]] && export CONDA_PREFIX="$_saved_conda_prefix"
+    [[ -n "$_saved_conda_exe" ]] && export CONDA_EXE="$_saved_conda_exe"
+    [[ -n "$_saved_conda_python" ]] && export CONDA_PYTHON_EXE="$_saved_conda_python"
     return 1
   fi
 
   PATH="$_orig_path"; hash -r
+  [[ -n "$_saved_conda_prefix" ]] && export CONDA_PREFIX="$_saved_conda_prefix"
+  [[ -n "$_saved_conda_exe" ]] && export CONDA_EXE="$_saved_conda_exe"
+  [[ -n "$_saved_conda_python" ]] && export CONDA_PYTHON_EXE="$_saved_conda_python"
   cd "$SCRIPT_DIR"
   return 0
 }
