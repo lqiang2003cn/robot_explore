@@ -1,6 +1,14 @@
 <mujoco model="x3plus_pick_and_place">
-  <compiler angle="radian"/>
+  <compiler angle="radian" meshdir="../urdf/meshes"/>
   <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+
+  <visual>
+    <quality shadowsize="4096" offsamples="8"/>
+    <global offwidth="1920" offheight="1080" elevation="-15" azimuth="135"/>
+    <map znear="0.01" zfar="50" shadowclip="1.0"/>
+    <rgba haze="0.15 0.2 0.3 1"/>
+    <headlight diffuse="0.15 0.15 0.18" ambient="0.12 0.12 0.14" specular="0.1 0.1 0.1"/>
+  </visual>
 
   <default>
     <joint damping="0.5" armature="0.01"/>
@@ -9,24 +17,77 @@
   </default>
 
   <asset>
+    <texture name="skybox" type="skybox" builtin="gradient"
+             rgb1="0.35 0.45 0.65" rgb2="0.08 0.10 0.16"
+             width="512" height="3072" mark="random" markrgb="0.6 0.6 0.7"/>
     <texture name="texplane" type="2d" builtin="checker"
-             rgb1="0.2 0.3 0.4" rgb2="0.1 0.15 0.2" width="512" height="512"/>
-    <material name="matplane" texture="texplane" texrepeat="5 5" reflectance="0.3"/>
-    <material name="mat_metal" rgba="0.6 0.6 0.65 1"/>
-    <material name="mat_arm" rgba="0.2 0.7 0.2 1"/>
-    <material name="mat_target" rgba="0.85 0.15 0.15 1"/>
-    <material name="mat_table" rgba="0.55 0.38 0.22 1"/>
+             rgb1="0.28 0.28 0.30" rgb2="0.20 0.20 0.22" width="512" height="512"/>
+    <texture name="textable" type="2d" builtin="flat"
+             rgb1="0.42 0.30 0.18" rgb2="0.50 0.36 0.22" width="512" height="512"
+             mark="random" markrgb="0.38 0.26 0.15"/>
+
+    <material name="matplane" texture="texplane" texrepeat="10 10"
+              reflectance="0.15" specular="0.2" shininess="0.1"/>
+    <material name="mat_green" rgba="0.18 0.62 0.22 1"
+              specular="0.5" shininess="0.4" reflectance="0.05"/>
+    <material name="mat_gray" rgba="0.72 0.72 0.74 1"
+              specular="0.6" shininess="0.5" reflectance="0.08"/>
+    <material name="mat_target" rgba="0.88 0.12 0.10 1"
+              specular="0.7" shininess="0.6" reflectance="0.1" emission="0.08"/>
+    <material name="mat_table" texture="textable" texrepeat="2 2"
+              specular="0.3" shininess="0.2" reflectance="0.05"/>
+
+    <mesh name="base_link_visual" file="X3plus/visual/base_link.STL"/>
+    <mesh name="arm_link1_visual" file="X3plus/visual/arm_link1.STL"/>
+    <mesh name="arm_link2_visual" file="X3plus/visual/arm_link2.STL"/>
+    <mesh name="arm_link3_visual" file="X3plus/visual/arm_link3.STL"/>
+    <mesh name="arm_link4_visual" file="X3plus/visual/arm_link4.STL"/>
+    <mesh name="arm_link5_visual" file="X3plus/visual/arm_link5.STL"/>
+    <mesh name="rlink1_visual" file="X3plus/visual/rlink1.STL"/>
+    <mesh name="rlink2_visual" file="X3plus/visual/rlink2.STL"/>
+    <mesh name="rlink3_visual" file="X3plus/visual/rlink3.STL"/>
+    <mesh name="llink1_visual" file="X3plus/visual/llink1.STL"/>
+    <mesh name="llink2_visual" file="X3plus/visual/llink2.STL"/>
+    <mesh name="llink3_visual" file="X3plus/visual/llink3.STL"/>
+    <mesh name="camera_link_visual" file="sensor/visual/camera_link.STL"/>
+    <mesh name="laser_link_visual" file="sensor/visual/laser_link.STL"/>
+    <mesh name="mono_link_visual" file="sensor/visual/mono_link.STL"/>
+
+    <mesh name="base_link_collision" file="X3plus/collision/base_link.STL"/>
+    <mesh name="arm_link1_collision" file="X3plus/collision/arm_link1.STL"/>
+    <mesh name="arm_link2_collision" file="X3plus/collision/arm_link2.STL"/>
+    <mesh name="arm_link3_collision" file="X3plus/collision/arm_link3.STL"/>
+    <mesh name="arm_link4_collision" file="X3plus/collision/arm_link4.STL"/>
+    <mesh name="arm_link5_collision" file="X3plus/collision/arm_link5.STL"/>
+    <mesh name="rlink1_collision" file="X3plus/collision/rlink1.STL"/>
+    <mesh name="rlink2_collision" file="X3plus/collision/rlink2.STL"/>
+    <mesh name="rlink3_collision" file="X3plus/collision/rlink3.STL"/>
+    <mesh name="llink1_collision" file="X3plus/collision/llink1.STL"/>
+    <mesh name="llink2_collision" file="X3plus/collision/llink2.STL"/>
+    <mesh name="llink3_collision" file="X3plus/collision/llink3.STL"/>
+    <mesh name="camera_link_collision" file="sensor/collision/camera_link.STL"/>
+    <mesh name="laser_link_collision" file="sensor/collision/laser_link.STL"/>
+    <mesh name="mono_link_collision" file="sensor/collision/mono_link.STL"/>
   </asset>
 
   <worldbody>
-    <light pos="0.3 -0.3 1.8" dir="-0.15 0.15 -1" diffuse="0.8 0.8 0.8" castshadow="true"/>
-    <light pos="-0.2 0.4 1.2" dir="0.1 -0.2 -1" diffuse="0.4 0.4 0.4"/>
+    <!-- Key light (warm, strong, casts shadows) -->
+    <light pos="0.5 -0.6 1.8" dir="-0.2 0.3 -1" diffuse="0.85 0.80 0.72"
+           specular="0.5 0.5 0.5" castshadow="true" cutoff="60"/>
+    <!-- Fill light (cool, softer, no shadows) -->
+    <light pos="-0.5 0.5 1.4" dir="0.2 -0.2 -1" diffuse="0.35 0.38 0.45"
+           specular="0.15 0.15 0.2" castshadow="false"/>
+    <!-- Rim / back light (highlights edges) -->
+    <light pos="-0.1 -0.6 1.6" dir="0.05 0.35 -1" diffuse="0.25 0.25 0.30"
+           specular="0.3 0.3 0.35" castshadow="true" cutoff="70"/>
+    <!-- Overhead ambient fill -->
+    <light pos="0.0 0.0 2.5" dir="0 0 -1" diffuse="0.18 0.18 0.22"
+           specular="0.05 0.05 0.05" castshadow="false"/>
 
-    <geom name="floor" type="plane" size="1.5 1.5 0.1" material="matplane"/>
+    <geom name="floor" type="plane" size="3.0 3.0 0.1" material="matplane"/>
 
-    <!-- Third-person camera for Octo primary observations -->
-    <camera name="front_cam" pos="0.55 -0.35 0.85"
-            xyaxes="0.5 0.866 0 -0.35 0.2 0.916" fovy="58"/>
+    <camera name="front_cam" pos="0.50 -0.38 0.78"
+            xyaxes="0.52 0.854 0 -0.32 0.19 0.928" fovy="50"/>
 
     <!-- ====== Table ====== -->
     <body name="table" pos="0 0 0.35">
@@ -44,66 +105,135 @@
             material="mat_target" solref="0.01 1" solimp="0.95 0.99 0.001"/>
     </body>
 
-    <!-- ====== X3Plus arm (mounted on table surface) ======
-         Kinematic chain from original x3plus.urdf.
-         Geometries approximated with primitives (STL meshes unavailable).
+    <!-- ====== X3Plus robot (mounted on table surface) ======
+         STL meshes from urdf/meshes/X3plus/ matching the real hardware.
+         Kinematic chain from x3plus.urdf.
     -->
     <body name="base_link" pos="-0.05 0 0.37">
-      <geom name="base_geom" type="box" size="0.08 0.06 0.02" material="mat_metal" mass="1.07"/>
+      <geom name="base_link_visual" type="mesh" mesh="base_link_visual"
+            material="mat_green" contype="0" conaffinity="0"/>
+      <geom name="base_link_collision" type="mesh" mesh="base_link_collision"
+            group="3" mass="1.075"/>
 
-      <!-- arm_joint1: xyz="0.09825 0 0.102" axis="0 0 -1" -->
+      <!-- Depth camera (fixed on base) -->
+      <body name="camera_link" pos="-0.043645 0 0.41955">
+        <geom name="camera_link_visual" type="mesh" mesh="camera_link_visual"
+              material="mat_gray" contype="0" conaffinity="0"/>
+        <geom name="camera_link_collision" type="mesh" mesh="camera_link_collision"
+              group="3" mass="0.224"/>
+      </body>
+
+      <!-- Lidar (fixed on base) -->
+      <body name="laser_link" pos="0.10478 0 0.0471">
+        <geom name="laser_link_visual" type="mesh" mesh="laser_link_visual"
+              material="mat_gray" contype="0" conaffinity="0"/>
+        <geom name="laser_link_collision" type="mesh" mesh="laser_link_collision"
+              group="3" mass="0.043"/>
+      </body>
+
       <body name="arm_link1" pos="0.09825 0 0.102">
         <joint name="arm_joint1" type="hinge" axis="0 0 -1"
                range="-1.5708 1.5708" damping="1.0"/>
-        <geom name="arm_geom1" type="cylinder" fromto="0 0 -0.01 0 0 0.0405"
-              size="0.018" material="mat_metal" mass="0.028"/>
+        <geom name="arm_link1_visual" type="mesh" mesh="arm_link1_visual"
+              material="mat_gray" contype="0" conaffinity="0"/>
+        <geom name="arm_link1_collision" type="mesh" mesh="arm_link1_collision"
+              group="3" mass="0.028"/>
 
-        <!-- arm_joint2: xyz="0 0 0.0405" rpy="-π/2 0 0" axis="0 0 -1" -->
         <body name="arm_link2" pos="0 0 0.0405" euler="-1.5708 0 0">
           <joint name="arm_joint2" type="hinge" axis="0 0 -1"
                  range="-1.5708 1.5708" damping="1.0"/>
-          <geom name="arm_geom2" type="capsule" fromto="0 0 0 0 -0.0829 0"
-                size="0.012" material="mat_arm" mass="0.032"/>
+          <geom name="arm_link2_visual" type="mesh" mesh="arm_link2_visual"
+                material="mat_green" contype="0" conaffinity="0"/>
+          <geom name="arm_link2_collision" type="mesh" mesh="arm_link2_collision"
+                group="3" mass="0.032"/>
 
-          <!-- arm_joint3: xyz="0 -0.0829 0" axis="0 0 -1" -->
           <body name="arm_link3" pos="0 -0.0829 0">
             <joint name="arm_joint3" type="hinge" axis="0 0 -1"
                    range="-1.5708 1.5708" damping="1.0"/>
-            <geom name="arm_geom3" type="capsule" fromto="0 0 0 0 -0.0829 0"
-                  size="0.012" material="mat_metal" mass="0.032"/>
+            <geom name="arm_link3_visual" type="mesh" mesh="arm_link3_visual"
+                  material="mat_gray" contype="0" conaffinity="0"/>
+            <geom name="arm_link3_collision" type="mesh" mesh="arm_link3_collision"
+                  group="3" mass="0.032"/>
 
-            <!-- arm_joint4: xyz="0 -0.0829 0" axis="0 0 -1" -->
             <body name="arm_link4" pos="0 -0.0829 0">
               <joint name="arm_joint4" type="hinge" axis="0 0 -1"
                      range="-1.5708 1.5708" damping="1.0"/>
-              <geom name="arm_geom4" type="capsule" fromto="0 0 0 0 -0.17455 0"
-                    size="0.01" material="mat_arm" mass="0.05"/>
+              <geom name="arm_link4_visual" type="mesh" mesh="arm_link4_visual"
+                    material="mat_green" contype="0" conaffinity="0"/>
+              <geom name="arm_link4_collision" type="mesh" mesh="arm_link4_collision"
+                    group="3" mass="0.050"/>
 
-              <!-- Wrist camera (from URDF mono_joint on arm_link4) -->
+              <!-- Wrist camera -->
               <camera name="wrist_cam" pos="-0.0481 -0.05145 -0.0022"
                       euler="1.5708 0 0" fovy="70"/>
 
-              <!-- arm_joint5: xyz="-0.00215 -0.17455 0" rpy="π/2 0 0" axis="0 0 1" -->
+              <!-- Wrist camera mount (mono_link, fixed on arm_link4) -->
+              <body name="mono_link" pos="-0.0481 -0.05145 -0.0022" euler="1.5708 0 0">
+                <geom name="mono_link_visual" type="mesh" mesh="mono_link_visual"
+                      material="mat_gray" contype="0" conaffinity="0"/>
+                <geom name="mono_link_collision" type="mesh" mesh="mono_link_collision"
+                      group="3" mass="0.0098"/>
+              </body>
+
               <body name="arm_link5" pos="-0.00215 -0.17455 0" euler="1.5708 0 0">
                 <joint name="arm_joint5" type="hinge" axis="0 0 1"
                        range="-1.5708 3.14159" damping="0.5"/>
-                <geom name="arm_geom5" type="box" size="0.015 0.018 0.012"
-                      material="mat_metal" mass="0.041"/>
+                <geom name="arm_link5_visual" type="mesh" mesh="arm_link5_visual"
+                      material="mat_gray" contype="0" conaffinity="0"/>
+                <geom name="arm_link5_collision" type="mesh" mesh="arm_link5_collision"
+                      group="3" mass="0.041"/>
 
-                <!-- Right finger: grip_joint xyz="-0.0035 -0.012625 -0.0685" rpy="0 -π/2 0" axis="0 0 1" range="-1.54 0" -->
+                <!-- Right finger: rlink1 (actuated) -> rlink2 (mimic) -->
                 <body name="rlink1" pos="-0.0035 -0.012625 -0.0685" euler="0 -1.5708 0">
                   <joint name="grip_joint" type="hinge" axis="0 0 1"
                          range="-1.54 0" damping="0.3"/>
-                  <geom name="rfinger" type="box" size="0.025 0.004 0.003"
-                        pos="0.013 0 0" material="mat_arm" mass="0.003"/>
+                  <geom name="rlink1_visual" type="mesh" mesh="rlink1_visual"
+                        material="mat_green" contype="0" conaffinity="0"/>
+                  <geom name="rlink1_collision" type="mesh" mesh="rlink1_collision"
+                        group="3" mass="0.00118"/>
+
+                  <body name="rlink2" pos="0.03 -0.00075429 0">
+                    <joint name="rlink_joint2" type="hinge" axis="0 0 1" damping="0.3"/>
+                    <geom name="rlink2_visual" type="mesh" mesh="rlink2_visual"
+                          material="mat_green" contype="0" conaffinity="0"/>
+                    <geom name="rlink2_collision" type="mesh" mesh="rlink2_collision"
+                          group="3" mass="0.00245"/>
+                  </body>
                 </body>
 
-                <!-- Left finger: mirrors grip_joint -->
+                <!-- Right linkage bar (rlink3, child of arm_link5) -->
+                <body name="rlink3" pos="-0.0035 -0.0045 -0.0505" euler="0 -1.5708 0">
+                  <joint name="rlink_joint3" type="hinge" axis="0 0 1" damping="0.3"/>
+                  <geom name="rlink3_visual" type="mesh" mesh="rlink3_visual"
+                        material="mat_green" contype="0" conaffinity="0"/>
+                  <geom name="rlink3_collision" type="mesh" mesh="rlink3_collision"
+                        group="3" mass="0.00088"/>
+                </body>
+
+                <!-- Left finger: llink1 (mimic) -> llink2 (mimic) -->
                 <body name="llink1" pos="-0.0035 0.012375 -0.0685" euler="0 -1.5708 0">
-                  <joint name="lgrip_joint" type="hinge" axis="0 0 1"
-                         range="0 1.54" damping="0.3"/>
-                  <geom name="lfinger" type="box" size="0.025 0.004 0.003"
-                        pos="0.013 0 0" material="mat_arm" mass="0.003"/>
+                  <joint name="llink_joint1" type="hinge" axis="0 0 1" damping="0.3"/>
+                  <geom name="llink1_visual" type="mesh" mesh="llink1_visual"
+                        material="mat_green" contype="0" conaffinity="0"/>
+                  <geom name="llink1_collision" type="mesh" mesh="llink1_collision"
+                        group="3" mass="0.00121"/>
+
+                  <body name="llink2" pos="0.03 0.00065104 0">
+                    <joint name="llink_joint2" type="hinge" axis="0 0 1" damping="0.3"/>
+                    <geom name="llink2_visual" type="mesh" mesh="llink2_visual"
+                          material="mat_green" contype="0" conaffinity="0"/>
+                    <geom name="llink2_collision" type="mesh" mesh="llink2_collision"
+                          group="3" mass="0.00245"/>
+                  </body>
+                </body>
+
+                <!-- Left linkage bar (llink3, child of arm_link5) -->
+                <body name="llink3" pos="-0.0035 0.0045 -0.0505" euler="0 -1.5708 0">
+                  <joint name="llink_joint3" type="hinge" axis="0 0 1" damping="0.3"/>
+                  <geom name="llink3_visual" type="mesh" mesh="llink3_visual"
+                        material="mat_green" contype="0" conaffinity="0"/>
+                  <geom name="llink3_collision" type="mesh" mesh="llink3_collision"
+                        group="3" mass="0.00088"/>
                 </body>
 
               </body>
@@ -114,9 +244,13 @@
     </body>
   </worldbody>
 
-  <!-- Gripper coupling: left finger = -1 * right finger (parallel close/open) -->
+  <!-- Gripper equality constraints (4-bar parallel linkage from URDF mimic joints) -->
   <equality>
-    <joint joint1="grip_joint" joint2="lgrip_joint" polycoef="0 -1 0 0 0"/>
+    <joint joint1="grip_joint" joint2="llink_joint1" polycoef="0 -1 0 0 0"/>
+    <joint joint1="grip_joint" joint2="rlink_joint2" polycoef="0 -1 0 0 0"/>
+    <joint joint1="grip_joint" joint2="rlink_joint3" polycoef="0 1 0 0 0"/>
+    <joint joint1="grip_joint" joint2="llink_joint2" polycoef="0 1 0 0 0"/>
+    <joint joint1="grip_joint" joint2="llink_joint3" polycoef="0 -1 0 0 0"/>
   </equality>
 
   <actuator>

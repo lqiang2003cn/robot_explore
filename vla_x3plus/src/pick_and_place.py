@@ -68,6 +68,10 @@ def render_frame(
     camera_name: str,
 ) -> np.ndarray:
     renderer.update_scene(data, camera=camera_name)
+    renderer.scene.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = True
+    renderer.scene.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = True
+    renderer.scene.flags[mujoco.mjtRndFlag.mjRND_SKYBOX] = True
+    renderer.scene.flags[mujoco.mjtRndFlag.mjRND_HAZE] = True
     return renderer.render().copy()
 
 
@@ -153,6 +157,8 @@ def run(use_random: bool = False):
     max_steps = sim_cfg["max_episode_steps"]
     control_dt = sim_cfg["control_dt"]
     n_substeps = int(control_dt / model.opt.timestep)
+    frame_skip = sim_cfg.get("frame_skip", 2)
+    video_fps = sim_cfg.get("video_fps", 30)
 
     renderer = make_renderer(model, resolution)
 
@@ -178,13 +184,16 @@ def run(use_random: bool = False):
     print(f"Running pick-and-place demo  ({max_steps} steps, "
           f"{'random' if use_random else 'octo'} actions)")
     print(f"  Task : \"{task_text}\"")
-    print(f"  Camera: {camera_name} @ {resolution}")
+    print(f"  Camera: {camera_name} @ {resolution[1]}x{resolution[0]}")
+    print(f"  Video : {video_fps} fps, capture every {frame_skip} steps")
 
     for step in range(max_steps):
-        image = render_frame(renderer, data, camera_name)
+        need_image = not use_random or (step % frame_skip == 0)
+        image = render_frame(renderer, data, camera_name) if need_image else None
 
-        if step % 10 == 0:
-            frames.append(image)
+        if step % frame_skip == 0:
+            frames.append(image if image is not None
+                          else render_frame(renderer, data, camera_name))
 
         if use_random:
             action = np_rng.standard_normal(7).astype(np.float32) * 0.3
@@ -213,11 +222,19 @@ def run(use_random: bool = False):
     renderer.close()
 
     video_path = output_dir / "pick_and_place_demo.mp4"
-    print(f"Saving video ({len(frames)} frames) -> {video_path}")
+    print(f"Saving video ({len(frames)} frames, {video_fps} fps) -> {video_path}")
 
     import imageio
 
-    imageio.mimwrite(str(video_path), frames, fps=10, quality=8)
+    imageio.mimwrite(
+        str(video_path),
+        frames,
+        fps=video_fps,
+        quality=10,
+        codec="libx264",
+        pixelformat="yuv420p",
+        output_params=["-preset", "slow", "-crf", "17"],
+    )
     print("Done.")
 
 

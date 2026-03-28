@@ -6,8 +6,10 @@ simulation:
   model_path: models/x3plus_mujoco.xml
   timestep: 0.002
   camera_name: front_cam
-  camera_resolution: [256, 256]
+  camera_resolution: [1072, 1920]   # ~1080p, both dims divisible by 16
   max_episode_steps: 400
   control_dt: 0.05    # policy query interval (20 Hz)
+  video_fps: 30
+  frame_skip: 2       # capture every Nth step (lower = smoother)
 
 output_dir: output
