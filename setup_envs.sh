@@ -428,15 +428,23 @@ setup_ros2_stack() {
     rm -rf "$ws_dir/build" "$ws_dir/install" "$ws_dir/log"
   fi
 
+  # Remove miniconda from PATH so colcon/CMake use the system Python
+  # (which has catkin_pkg and other ROS 2 Python deps installed).
+  local _orig_path="$PATH"
+  PATH=$(echo "$PATH" | tr ':' '\n' | grep -v miniconda | paste -sd:)
+  hash -r
+
   log "  Building colcon workspace..."
   cd "$ws_dir"
   if colcon build; then
     ok "ros2_stack workspace built"
   else
     err "ros2_stack build FAILED"
+    PATH="$_orig_path"; hash -r
     return 1
   fi
 
+  PATH="$_orig_path"; hash -r
   cd "$SCRIPT_DIR"
   return 0
 }
