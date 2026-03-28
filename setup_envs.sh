@@ -5,18 +5,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # ── Component order (explicit for dependency control) ──────────
-COMPONENTS=(
+ALL_COMPONENTS=(
   simulation
   ros2_stack
   meshroom
   gauss_splat
 )
+DEFAULT_COMPONENTS=(ros2_stack)
 
 # ── Options ────────────────────────────────────────────────────
 CLEAN=false
 PARALLEL=false
 DRY_RUN=false
 FORCE_REINSTALL=false
+ALL=false
 
 usage() {
   cat <<EOF
@@ -25,17 +27,22 @@ Usage: $(basename "$0") [OPTIONS] [component ...]
 Set up conda environments for robot_explore components.
 
 Options:
+  --all               Set up all components (simulation, ros2_stack, meshroom, gauss_splat)
   --clean             Remove and recreate environments from scratch
   --force-reinstall   Remove existing Miniconda and reinstall from scratch
   --parallel          Create environments in parallel (faster, noisier output)
   --dry-run           Show what would be done without executing
   -h, --help          Show this help message
 
-If component names are given, only those environments are set up.
-Otherwise all components are set up.
+By default only ros2_stack (and its dependencies) is set up.
+Pass component names or --all to set up additional components.
+
+Components: ${ALL_COMPONENTS[*]}
 
 Examples:
-  $(basename "$0")                     # set up everything
+  $(basename "$0")                     # set up ros2_stack only
+  $(basename "$0") --all               # set up everything
+  $(basename "$0") simulation          # set up simulation only
   $(basename "$0") --clean simulation  # recreate simulation env
 EOF
   exit 0
@@ -45,6 +52,7 @@ EOF
 SELECTED=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --all)     ALL=true;              shift ;;
     --clean)   CLEAN=true;            shift ;;
     --force-reinstall) FORCE_REINSTALL=true; shift ;;
     --parallel) PARALLEL=true;        shift ;;
@@ -57,6 +65,10 @@ done
 
 if [[ ${#SELECTED[@]} -gt 0 ]]; then
   COMPONENTS=("${SELECTED[@]}")
+elif [[ "$ALL" == true ]]; then
+  COMPONENTS=("${ALL_COMPONENTS[@]}")
+else
+  COMPONENTS=("${DEFAULT_COMPONENTS[@]}")
 fi
 
 # ── Colors ─────────────────────────────────────────────────────
