@@ -20,7 +20,7 @@ import os
 import pathlib
 import threading
 
-os.environ.setdefault("MUJOCO_GL", "osmesa")
+os.environ.setdefault("MUJOCO_GL", "egl")
 
 import mujoco
 import numpy as np
@@ -28,8 +28,8 @@ import yaml
 
 import rclpy
 from rclpy.node import Node
-from rclpy.executors import MultiThreadedExecutor
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor, SingleThreadedExecutor
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from sensor_msgs.msg import JointState, Image
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool
@@ -76,7 +76,11 @@ class MuJoCoBridgeNode(Node):
         self._recording = record_video is not None
         self._video_saved = False
         self._saving_video = threading.Lock()
-        self._qpos_history: list[np.ndarray] = []
+
+        snap_dt = self._model.opt.timestep * self._SIM_SUBSTEPS
+        self._snap_dt = snap_dt
+        self._video_frame_interval = max(1, round(1.0 / (video_fps * snap_dt)))
+        self._sim_step_count = 0
 
         self._actuator_ctrl_idx = {
             name: i for i, name in enumerate(ACTUATOR_JOINT_NAMES)
@@ -179,47 +183,27 @@ class MuJoCoBridgeNode(Node):
         path = pathlib.Path(self._record_video_path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        n_snapshots = len(self._qpos_history)
-        if n_snapshots == 0:
-            self.get_logger().warn("No qpos snapshots recorded, skipping video")
+        n_frames = len(self._video_frames)
+        if n_frames == 0:
+            self.get_logger().warn("No video frames captured, skipping video")
             return
 
-        snap_dt = self._model.opt.timestep * self._SIM_SUBSTEPS
-        sim_duration = n_snapshots * snap_dt
-        n_frames = max(1, int(sim_duration * self._video_fps))
+        sim_duration = self._sim_step_count * self._snap_dt
         self.get_logger().info(
-            f"Rendering {n_frames} video frames from {n_snapshots} sim snapshots "
+            f"Writing {n_frames} pre-rendered frames "
             f"({sim_duration:.1f}s sim time) -> {path}"
         )
 
-        import time as _time
-
-        frames: list[np.ndarray] = []
-        t0 = _time.monotonic()
-        for i in range(n_frames):
-            t = i / self._video_fps
-            idx = min(int(t / snap_dt), n_snapshots - 1)
-            self._data.qpos[:] = self._qpos_history[idx]
-            mujoco.mj_forward(self._model, self._data)
-            self._renderer.update_scene(self._data, camera=self._camera_name)
-            frames.append(self._renderer.render().copy())
-            if (i + 1) % 20 == 0 or i == n_frames - 1:
-                elapsed = _time.monotonic() - t0
-                self.get_logger().info(
-                    f"  rendered {i+1}/{n_frames} frames ({elapsed:.1f}s)"
-                )
-
-        self.get_logger().info(f"Writing {len(frames)} frames at {self._video_fps} fps")
         imageio.mimwrite(
             str(path),
-            frames,
+            self._video_frames,
             fps=self._video_fps,
             quality=10,
             codec="libx264",
             pixelformat="yuv420p",
-            output_params=["-preset", "slow", "-crf", "17"],
+            output_params=["-preset", "fast", "-crf", "17"],
         )
-        self._qpos_history.clear()
+        self._video_frames.clear()
         self.get_logger().info(f"Video saved: {path}")
         raise SystemExit(0)
 
@@ -271,7 +255,12 @@ class MuJoCoBridgeNode(Node):
             for _ in range(self._SIM_SUBSTEPS):
                 mujoco.mj_step(self._model, self._data)
             if self._recording and not self._video_saved:
-                self._qpos_history.append(self._data.qpos.copy())
+                self._sim_step_count += 1
+                if self._sim_step_count % self._video_frame_interval == 0:
+                    self._renderer.update_scene(
+                        self._data, camera=self._camera_name,
+                    )
+                    self._video_frames.append(self._renderer.render().copy())
                 return
             self._render_counter += 1
             if self._render_counter % 3 == 0:
@@ -371,7 +360,7 @@ def main() -> None:
         video_fps=args.video_fps,
     )
 
-    executor = MultiThreadedExecutor()
+    executor = SingleThreadedExecutor()
     executor.add_node(node)
     try:
         executor.spin()
