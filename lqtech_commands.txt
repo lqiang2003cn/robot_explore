@@ -1,0 +1,2 @@
+cd vla_x3plus
+./run_pick_place.sh    
