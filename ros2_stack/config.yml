@@ -1,9 +1,20 @@
-# ROS2 stack configuration for Franka pick-and-place demo
-cube_position: [0.4, 0.12, 0.45]
-place_position: [0.4, -0.25, 0.45]
+# ROS2 stack configuration
+# Each robot section defines task parameters used by BT nodes.
 
-grasp_offset_z: 0.04       # approach height above object
-gripper_open: 0.04          # finger joint position when open
-gripper_closed: 0.001       # finger joint position when closed
-settle_time: 0.5            # seconds to wait after gripper action
-lift_height: 0.15           # how high to lift after grasping
+franka:
+  cube_position: [0.4, 0.12, 0.45]
+  place_position: [0.4, -0.25, 0.45]
+  grasp_offset_z: 0.04
+  gripper_open: 0.04
+  gripper_closed: 0.001
+  settle_time: 0.5
+  lift_height: 0.15
+
+x3plus:
+  cube_position: [0.15, 0.0, 0.39]
+  place_position: [0.15, -0.15, 0.39]
+  grasp_offset_z: 0.02
+  gripper_open: 0.0            # grip_joint = 0 (open)
+  gripper_closed: -1.54        # grip_joint = -1.54 (closed)
+  settle_time: 0.5
+  lift_height: 0.06

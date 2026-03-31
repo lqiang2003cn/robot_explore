@@ -1,112 +1,32 @@
 ---
-description: Project structure conventions and setup rules for robot_explore
+description: Project conventions; keep this rule file under 60 lines
 alwaysApply: true
 ---
 
-Keep this file compact and always under 120 lines.
+Keep this file always under 60 lines. Document principles here; versions, flags, and command examples belong in each component’s `config.yml`, `*_setup.sh`, `./setup_envs.sh --help`, or README.
 
-# Project Structure
+## Layout
 
-The project contains five components — `simulation`, `ros2_stack`, `meshroom`, `gauss_splat`, and `vla_x3plus`:
+Five stacks at repo root: `simulation`, `ros2_stack`, `meshroom`, `gauss_splat`, `vla_x3plus`. Each has `config.yml`, a component `*_setup.sh` (e.g. `simulation/simulation_setup.sh`), and `src/`. `ros2_stack` also has a colcon workspace under `ws/`. Large binaries, inputs, outputs, and cloned third-party trees are usually gitignored next to that component.
 
-```
-simulation/
-  environment.yml        # conda env definition (Python 3.12)
-  simulation_setup.sh    # installs system deps + conda env + Isaac Sim 6.0.0
-  config.yml             # simulation parameters
-  src/                   # source code
+## Provisioning
 
-ros2_stack/
-  ros2_stack_setup.sh  # installs ROS 2 Jazzy + builds colcon workspace
-  config.yml         # pick-and-place parameters
-  ws/                # ROS 2 colcon workspace
-    src/
-      panda_pick_place/   # custom ROS 2 Python package
-      topic_based_ros2_control/  # cloned at setup time (gitignored)
+Initial install is `./setup_envs.sh` from the repo root: it runs `common_setup.sh` and delegates to each stack’s setup script. Which components run by default vs. `--all` / explicit names is defined in `setup_envs.sh` (see its usage text).
 
-meshroom/
-  meshroom_setup.sh  # downloads + verifies Meshroom binary
-  config.yml         # reconstruction pipeline parameters + version
-  src/               # source code (reconstruct.py wrapper)
-  input/             # place image sets here (gitignored)
-  output/            # reconstruction results (gitignored)
-  Meshroom-<version>/ # prebuilt binary (Zenodo, gitignored)
+## Dependencies
 
-gauss_splat/
-  environment.yml        # conda env definition (Python 3.11)
-  gauss_splat_setup.sh   # installs COLMAP + conda env + PyTorch + nerfstudio
-  config.yml         # reconstruction parameters
-  src/               # source code (reconstruct.py wrapper)
-  input/             # place image sets here (gitignored)
-  output/            # reconstruction results (gitignored)
+- Conda stacks (`simulation`, `gauss_splat`, `vla_x3plus`): add Python/pip/conda deps to that folder’s `environment.yml`.
+- Native stacks (`ros2_stack`, `meshroom`): add system or distro packages via `common_setup.sh` or the component `*_setup.sh`.
+- Do not assume one Python environment for the whole repo; `activate_env.sh` and the ROS setup scripts isolate conda vs system toolchains.
 
-vla_x3plus/
-  environment.yml        # conda env definition (Python 3.12)
-  vla_x3plus_setup.sh   # installs conda env + LeRobot, MuJoCo
-  config.yml         # policy + simulation parameters
-  src/               # source code (env.py, pick_and_place.py)
-  urdf/              # x3plus URDF (reference copy from monty_isaac)
-  models/            # MuJoCo MJCF scene (x3plus_mujoco.xml)
-  output/            # demo videos (gitignored)
-```
+## Private Git access
 
-## Cloning Private Repos
+For private clones, use credentials from `.env` (e.g. `GH_TOKEN` embedded in an HTTPS URL). Public deps use normal `git clone` URLs in setup scripts unless you substitute auth.
 
-- Load `GH_TOKEN` from `.env` and use it for authenticated HTTPS clones: `git clone https://$GH_TOKEN@github.com/OWNER/REPO.git`.
+## How to run
 
-## Dependency Placement
+`source activate_env.sh <component>` from the repo root, then run entrypoints from that component’s directory. Activation is stack-specific: conda env, `/opt/ros/...` + `ws/install` for `ros2_stack`, or Meshroom on `PATH` for `meshroom`—see `activate_env.sh` for the source of truth.
 
-- Components with a conda env (e.g. `simulation`, `gauss_splat`, `vla_x3plus`): add Python/pip/conda deps to that component's `environment.yml`.
-- Components without a conda env (e.g. `ros2_stack`, `meshroom`) and system-level packages: add deps to `common_setup.sh` or the component's `{name}_setup.sh`.
+## Cross-component integration
 
-## Simulation Component
-
-- Isaac Sim 6.0.0 and system deps are installed via `simulation/simulation_setup.sh`.
-- Run standalone pick-and-place: `source activate_env.sh simulation && python -m src.pick_and_place`.
-- Run ROS2-bridged scene: `source activate_env.sh simulation && python -m src.ros2_pick_and_place`.
-
-## ROS2 Stack Component
-
-- No conda env — uses native Ubuntu ROS 2 Jazzy packages.
-- ROS 2, ros2_control, MoveIt2, BehaviorTree.CPP installed via `ros2_stack/ros2_stack_setup.sh`.
-- `topic_based_ros2_control` is cloned and built in the colcon workspace.
-- Uses MoveIt2 for motion planning, py_trees for BT orchestration.
-- Run: `source activate_env.sh ros2_stack && ros2 launch panda_pick_place pick_place.launch.py`.
-
-## Meshroom Component
-
-- No conda env — uses prebuilt Meshroom (CUDA 12; version in `meshroom/config.yml`, URL auto-resolved from GitHub release).
-- Default pipeline `photogrammetryObject` uses Grounding DINO + SAM for object detection/segmentation before reconstruction.
-- `reconstruct.py` wraps `meshroom_batch` with a dual interface (function + CLI).
-- Pass `--prompt "description"` to specify the target object; defaults to the object name.
-- Other components call it via subprocess to maintain environment isolation.
-- Reconstruct: `source activate_env.sh meshroom && python -m src.reconstruct --name <object> --prompt "description"`.
-- Import into Isaac Sim: `source activate_env.sh simulation && python -m src.import_mesh --name <object>`.
-
-## Gauss Splat Component
-
-- Uses conda env (`roboex-gauss-splat`, Python 3.11) + nerfstudio (installed via `gauss_splat/gauss_splat_setup.sh`).
-- COLMAP installed as system package by `gauss_splat/gauss_splat_setup.sh`.
-- Pipeline: COLMAP SfM → splatfacto training → TSDF mesh extraction.
-- Pass `--prompt "description"` to enable GDINO + SAM2 object segmentation before reconstruction.
-  SAM2 video tracking propagates masks across all frames for temporally consistent results.
-- Multi-view input (10-50 images) or video; ~5-15 min total vs 30-60 for Meshroom.
-- Full-scene reconstruct: `source activate_env.sh gauss_splat && python -m src.reconstruct --name <object>`.
-- Object-only reconstruct: `source activate_env.sh gauss_splat && python -m src.reconstruct --name <object> --prompt "description"`.
-- Segment only: `source activate_env.sh gauss_splat && python -m src.segment --name <object> --prompt "description"`.
-- Import into Isaac Sim: `source activate_env.sh simulation && python -m src.import_mesh --name <object> --source gauss_splat`.
-
-## VLA X3Plus Component
-
-- Uses conda env (`roboex-vla-x3plus`, Python 3.12) + LeRobot (PyTorch) + MuJoCo.
-- MuJoCo scene (`models/x3plus_mujoco.xml`) wrapped as Gymnasium env (`src/env.py`) with native 6-D joint-space actions.
-- Policy type configurable in `config.yml` (`policy_type`: smolvla, act, diffusion); default SmolVLA.
-- Original URDF kept in `urdf/` for reference; the arm has 5-DOF + parallel gripper (6 actuators).
-- Run demo (with policy): `source activate_env.sh vla_x3plus && python -m src.pick_and_place`.
-- Run demo (random actions, no GPU): `source activate_env.sh vla_x3plus && python -m src.pick_and_place --random`.
-- Override policy: `source activate_env.sh vla_x3plus && python -m src.pick_and_place --policy <hub_id_or_path>`.
-
-## Running the ROS2 Pick-and-Place Demo
-
-Terminal 1 (Isaac Sim): `source activate_env.sh simulation && python -m src.ros2_pick_and_place`
-Terminal 2 (ROS2):      `source activate_env.sh ros2_stack && ros2 launch panda_pick_place pick_place.launch.py`
+When one stack drives another, prefer subprocess so each process keeps its own environment. Shared artifacts and paths are defined in the relevant `config.yml` and code, not here.

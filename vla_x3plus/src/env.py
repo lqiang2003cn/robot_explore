@@ -58,12 +58,21 @@ class X3PlusPickCubeEnv(gym.Env):
         delta_scale: float = 0.05,
         max_episode_steps: int = 400,
         render_mode: str = "rgb_array",
+        place_position: tuple[float, float, float] | None = None,
+        cube_noise: float = 0.05,
+        success_radius: float = 0.03,
     ):
         super().__init__()
         self.render_mode = render_mode
         self.camera_name = camera_name
         self.delta_scale = delta_scale
         self.max_episode_steps = max_episode_steps
+        self.place_position = np.array(
+            place_position if place_position is not None else [0.15, -0.15, 0.39],
+            dtype=np.float64,
+        )
+        self._cube_noise = cube_noise
+        self._success_radius = success_radius
         self._step_count = 0
 
         xml_path = COMPONENT_DIR / model_path
@@ -80,6 +89,7 @@ class X3PlusPickCubeEnv(gym.Env):
         ])
 
         self._cube_jnt_adr = self.mj_model.joint("cube_joint").qposadr[0]
+        self._table_surface_z = 0.37
 
         self.observation_space = spaces.Dict({
             "observation.images.front_cam": spaces.Box(
@@ -130,7 +140,7 @@ class X3PlusPickCubeEnv(gym.Env):
 
         mujoco.mj_resetData(self.mj_model, self.mj_data)
 
-        noise = self._rng.uniform(-0.03, 0.03, size=2)
+        noise = self._rng.uniform(-self._cube_noise, self._cube_noise, size=2)
         self.mj_data.qpos[self._cube_jnt_adr: self._cube_jnt_adr + 3] = (
             self._cube_init_pos + np.array([noise[0], noise[1], 0.0])
         )
@@ -156,15 +166,21 @@ class X3PlusPickCubeEnv(gym.Env):
         self._step_count += 1
         obs = self._get_obs()
         reward = self._compute_reward()
-        terminated = False
-        truncated = self._step_count >= self.max_episode_steps
 
         ee = self.mj_data.body("arm_link5").xpos
         cube = self.mj_data.body("target_cube").xpos
+
+        cube_at_place = float(np.linalg.norm(cube - self.place_position)) < self._success_radius
+        cube_on_surface = cube[2] > self._table_surface_z
+        success = cube_at_place and cube_on_surface
+        terminated = success
+        truncated = (not terminated) and self._step_count >= self.max_episode_steps
+
         info = {
             "ee_pos": ee.copy(),
             "cube_pos": cube.copy(),
             "dist": float(np.linalg.norm(ee - cube)),
+            "success": success,
         }
         return obs, reward, terminated, truncated, info
 

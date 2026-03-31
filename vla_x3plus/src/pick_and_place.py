@@ -148,6 +148,7 @@ def run(use_random: bool = False, policy_path: str | None = None):
     config = load_config()
     sim_cfg = config["simulation"]
     model_cfg = config["model"]
+    ds_cfg = config.get("dataset", {})
 
     env = X3PlusPickCubeEnv(
         model_path=sim_cfg["model_path"],
@@ -156,6 +157,7 @@ def run(use_random: bool = False, policy_path: str | None = None):
         timestep=sim_cfg["timestep"],
         control_dt=sim_cfg["control_dt"],
         max_episode_steps=sim_cfg["max_episode_steps"],
+        place_position=ds_cfg.get("place_position"),
     )
 
     max_steps = sim_cfg["max_episode_steps"]

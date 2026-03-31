@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>x3plus_description</name>
+  <version>0.1.0</version>
+  <description>URDF, meshes, and MoveIt2 config for the Yahboom X3Plus arm with topic_based_ros2_control</description>
+  <maintainer email="dev@robot-explore.local">robot_explore</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

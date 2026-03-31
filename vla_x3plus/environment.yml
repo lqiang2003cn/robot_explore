@@ -1,4 +1,5 @@
 name: roboex-vla-x3plus
+# For ROS2 bridge/recorder: source /opt/ros/jazzy/setup.bash BEFORE activating this env.
 channels:
   - conda-forge
 dependencies:

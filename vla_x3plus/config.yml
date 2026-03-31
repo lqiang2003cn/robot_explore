@@ -14,4 +14,28 @@ simulation:
   video_fps: 30
   frame_skip: 2                    # capture every Nth step (lower = smoother)
 
+dataset:
+  repo_id: "local/x3plus_pick_cube"
+  repo_id_ros2: "local/x3plus_ros2"  # dataset ID for ROS2-recorded episodes
+  num_episodes: 100
+  place_position: [0.15, -0.15, 0.39]
+
+ros2:
+  # Activation: source /opt/ros/jazzy/setup.bash && source activate_env.sh vla_x3plus
+  # Bridge:   python -m src.mujoco_bridge_node
+  # Recorder: python -m src.record_dataset_ros2 --num-episodes 100
+  topics:
+    joint_states: "/joint_states"
+    joint_command: "/joint_command"
+    cube_pose: "/cube_pose"
+    target_place_pose: "/target_place_pose"
+    front_cam_image: "/front_cam/image_raw"
+    task_complete: "/task_complete"
+
+training:
+  pretrained_path: "lerobot/smolvla_base"
+  batch_size: 32
+  steps: 20000
+  output_dir: "outputs/train/smolvla_x3plus"
+
 output_dir: output
