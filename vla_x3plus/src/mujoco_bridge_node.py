@@ -184,7 +184,8 @@ class MuJoCoBridgeNode(Node):
             self.get_logger().warn("No qpos snapshots recorded, skipping video")
             return
 
-        sim_duration = n_snapshots * self._model.opt.timestep
+        snap_dt = self._model.opt.timestep * self._SIM_SUBSTEPS
+        sim_duration = n_snapshots * snap_dt
         n_frames = max(1, int(sim_duration * self._video_fps))
         self.get_logger().info(
             f"Rendering {n_frames} video frames from {n_snapshots} sim snapshots "
@@ -197,7 +198,7 @@ class MuJoCoBridgeNode(Node):
         t0 = _time.monotonic()
         for i in range(n_frames):
             t = i / self._video_fps
-            idx = min(int(t / self._model.opt.timestep), n_snapshots - 1)
+            idx = min(int(t / snap_dt), n_snapshots - 1)
             self._data.qpos[:] = self._qpos_history[idx]
             mujoco.mj_forward(self._model, self._data)
             self._renderer.update_scene(self._data, camera=self._camera_name)
