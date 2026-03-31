@@ -269,9 +269,8 @@ class MuJoCoBridgeNode(Node):
             self._update_grip_weld()
             for _ in range(self._SIM_SUBSTEPS):
                 mujoco.mj_step(self._model, self._data)
-                if self._recording and not self._video_saved:
-                    self._qpos_history.append(self._data.qpos.copy())
             if self._recording and not self._video_saved:
+                self._qpos_history.append(self._data.qpos.copy())
                 return
             self._render_counter += 1
             if self._render_counter % 3 == 0:
