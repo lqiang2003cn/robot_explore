@@ -41,13 +41,12 @@ gauss_splat/
   output/            # reconstruction results (gitignored)
 
 vla_x3plus/
-  environment.yml        # conda env definition (Python 3.10)
-  vla_x3plus_setup.sh   # installs conda env + JAX, MuJoCo, Octo VLA
-  config.yml         # model + simulation parameters
-  src/               # source code (pick_and_place.py demo)
+  environment.yml        # conda env definition (Python 3.12)
+  vla_x3plus_setup.sh   # installs conda env + LeRobot, MuJoCo
+  config.yml         # policy + simulation parameters
+  src/               # source code (env.py, pick_and_place.py)
   urdf/              # x3plus URDF (reference copy from monty_isaac)
   models/            # MuJoCo MJCF scene (x3plus_mujoco.xml)
-  third_party/octo/  # cloned Octo repo (gitignored)
   output/            # demo videos (gitignored)
 ```
 
@@ -99,12 +98,13 @@ vla_x3plus/
 
 ## VLA X3Plus Component
 
-- Uses conda env (`roboex-vla-x3plus`, Python 3.10) + Octo VLA + MuJoCo.
-- Octo (octo-models/octo) is cloned into `third_party/octo/` by `vla_x3plus/vla_x3plus_setup.sh`.
-- MuJoCo scene (`models/x3plus_mujoco.xml`) uses primitive geometry derived from the x3plus URDF kinematic chain.
+- Uses conda env (`roboex-vla-x3plus`, Python 3.12) + LeRobot (PyTorch) + MuJoCo.
+- MuJoCo scene (`models/x3plus_mujoco.xml`) wrapped as Gymnasium env (`src/env.py`) with native 6-D joint-space actions.
+- Policy type configurable in `config.yml` (`policy_type`: smolvla, act, diffusion); default SmolVLA.
 - Original URDF kept in `urdf/` for reference; the arm has 5-DOF + parallel gripper (6 actuators).
-- Run demo (with Octo): `source activate_env.sh vla_x3plus && python -m src.pick_and_place`.
+- Run demo (with policy): `source activate_env.sh vla_x3plus && python -m src.pick_and_place`.
 - Run demo (random actions, no GPU): `source activate_env.sh vla_x3plus && python -m src.pick_and_place --random`.
+- Override policy: `source activate_env.sh vla_x3plus && python -m src.pick_and_place --policy <hub_id_or_path>`.
 
 ## Running the ROS2 Pick-and-Place Demo
 

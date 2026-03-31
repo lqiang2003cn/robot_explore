@@ -1,15 +1,17 @@
 model:
-  checkpoint: "hf://rail-berkeley/octo-small-1.5"
-  action_dim: 7       # Octo outputs (dx, dy, dz, droll, dpitch, dyaw, gripper)
+  policy_type: smolvla             # smolvla | act | diffusion
+  pretrained_path: "lerobot/smolvla_base"
+  action_dim: 6                    # 5 arm joints + 1 gripper (joint-space)
+  task: "pick up the red cube"
 
 simulation:
   model_path: models/x3plus_mujoco.xml
   timestep: 0.002
   camera_name: front_cam
-  camera_resolution: [1072, 1920]   # ~1080p, both dims divisible by 16
+  camera_resolution: [256, 256]    # LeRobot policies expect 256x256
   max_episode_steps: 400
-  control_dt: 0.05    # policy query interval (20 Hz)
+  control_dt: 0.05                 # policy query interval (20 Hz)
   video_fps: 30
-  frame_skip: 2       # capture every Nth step (lower = smoother)
+  frame_skip: 2                    # capture every Nth step (lower = smoother)
 
 output_dir: output

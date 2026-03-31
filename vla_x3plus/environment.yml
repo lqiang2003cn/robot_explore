@@ -2,10 +2,9 @@ name: roboex-vla-x3plus
 channels:
   - conda-forge
 dependencies:
-  - python=3.10
+  - python=3.12
   - pyyaml
   - pip
   - pip:
-    - scipy<1.13
-    - transformers>=4.34.1,<5
     - hf_transfer
+    - lerobot[smolvla]

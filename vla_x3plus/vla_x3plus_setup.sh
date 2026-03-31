@@ -15,28 +15,22 @@ if [[ "$DRY_RUN" == true ]]; then
   exit 0
 fi
 
-mkdir -p "$SCRIPT_DIR/vla_x3plus/third_party" "$SCRIPT_DIR/vla_x3plus/output"
+mkdir -p "$SCRIPT_DIR/vla_x3plus/output"
 
 setup_conda_env vla_x3plus
 
-log "  Installing JAX 0.4.20 with CUDA 12..."
-conda run -n "$env_name" pip install "jax[cuda12_pip]==0.4.20" \
-  -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+lerobot_ver=$(conda run -n "$env_name" python -c "import lerobot; print(lerobot.__version__)")
+if [[ "$lerobot_ver" == "0.5.0" ]]; then
+  log "  Patching lerobot $lerobot_ver (remove duplicate @dataclass on GR00TN15Config)..."
+  lerobot_site=$(conda run -n "$env_name" python -c "import lerobot, pathlib; print(pathlib.Path(lerobot.__file__).parent)")
+  patch -N -d "$(dirname "$lerobot_site")" -p1 < "$SCRIPT_DIR/vla_x3plus/patches/lerobot_groot_n1_dataclass.patch" \
+    || log "  (patch already applied)"
+else
+  log "  Skipping lerobot patch (installed $lerobot_ver, patch targets 0.5.0)"
+fi
 
 log "  Installing MuJoCo + Gymnasium..."
-conda run -n "$env_name" pip install mujoco
-conda run -n "$env_name" pip install "gymnasium[mujoco]"
-
-log "  Cloning and installing Octo VLA..."
-OCTO_DIR="$SCRIPT_DIR/vla_x3plus/third_party/octo"
-if [[ ! -d "$OCTO_DIR" ]]; then
-  log "    Cloning octo-models/octo..."
-  git clone https://github.com/octo-models/octo.git "$OCTO_DIR"
-else
-  ok "Octo already cloned, skipping"
-fi
-conda run -n "$env_name" pip install -e "$OCTO_DIR"
-conda run -n "$env_name" pip install -r "$OCTO_DIR/requirements.txt"
+conda run -n "$env_name" pip install mujoco "gymnasium[mujoco]"
 
 log "  Installing imageio[ffmpeg] for video rendering..."
 conda run -n "$env_name" pip install "imageio[ffmpeg]"
