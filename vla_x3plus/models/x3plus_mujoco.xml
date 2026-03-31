@@ -11,9 +11,9 @@
   </visual>
 
   <default>
-    <joint damping="0.5" armature="0.01"/>
+    <joint damping="2.0" armature="0.01"/>
     <geom condim="4" friction="1 0.5 0.01"/>
-    <position kp="50"/>
+    <position kp="200"/>
   </default>
 
   <asset>
@@ -98,11 +98,22 @@
       <geom name="leg4" type="cylinder" fromto=" 0.25  0.25 -0.35  0.25  0.25 -0.02" size="0.02" material="mat_table"/>
     </body>
 
-    <!-- ====== Target cube (free body) ====== -->
-    <body name="target_cube" pos="0.15 0.0 0.39">
+    <!-- ====== Pedestals for pick and place (narrow cylinders) ====== -->
+    <body name="pick_pedestal" pos="0.15 0.08 0.404">
+      <geom name="pick_pedestal_geom" type="cylinder" size="0.008 0.034"
+            rgba="0.6 0.6 0.6 1" mass="5"/>
+    </body>
+    <body name="place_pedestal" pos="0.15 -0.15 0.404">
+      <geom name="place_pedestal_geom" type="cylinder" size="0.008 0.034"
+            rgba="0.4 0.7 0.4 1" mass="5"/>
+    </body>
+
+    <!-- ====== Target cube (free body, sits on pick pedestal) ====== -->
+    <body name="target_cube" pos="0.15 0.08 0.451">
       <freejoint name="cube_joint"/>
-      <geom name="cube" type="box" size="0.02 0.02 0.02" mass="0.05"
-            material="mat_target" solref="0.01 1" solimp="0.95 0.99 0.001"/>
+      <geom name="cube" type="box" size="0.012 0.012 0.014" mass="0.02"
+            material="mat_target" friction="1.5 0.05 0.01"
+            solref="0.01 1" solimp="0.95 0.99 0.001"/>
     </body>
 
     <!-- ====== X3Plus robot (mounted on table surface) ======
@@ -113,14 +124,14 @@
       <geom name="base_link_visual" type="mesh" mesh="base_link_visual"
             material="mat_green" contype="0" conaffinity="0"/>
       <geom name="base_link_collision" type="mesh" mesh="base_link_collision"
-            group="3" mass="1.075"/>
+            group="3" mass="1.075" contype="0" conaffinity="0"/>
 
       <!-- Depth camera (fixed on base) -->
       <body name="camera_link" pos="-0.043645 0 0.41955">
         <geom name="camera_link_visual" type="mesh" mesh="camera_link_visual"
               material="mat_gray" contype="0" conaffinity="0"/>
         <geom name="camera_link_collision" type="mesh" mesh="camera_link_collision"
-              group="3" mass="0.224"/>
+              group="3" mass="0.224" contype="0" conaffinity="0"/>
       </body>
 
       <!-- Lidar (fixed on base) -->
@@ -128,7 +139,7 @@
         <geom name="laser_link_visual" type="mesh" mesh="laser_link_visual"
               material="mat_gray" contype="0" conaffinity="0"/>
         <geom name="laser_link_collision" type="mesh" mesh="laser_link_collision"
-              group="3" mass="0.043"/>
+              group="3" mass="0.043" contype="0" conaffinity="0"/>
       </body>
 
       <body name="arm_link1" pos="0.09825 0 0.102">
@@ -137,7 +148,7 @@
         <geom name="arm_link1_visual" type="mesh" mesh="arm_link1_visual"
               material="mat_gray" contype="0" conaffinity="0"/>
         <geom name="arm_link1_collision" type="mesh" mesh="arm_link1_collision"
-              group="3" mass="0.028"/>
+              group="3" mass="0.028" contype="0" conaffinity="0"/>
 
         <body name="arm_link2" pos="0 0 0.0405" euler="-1.5708 0 0">
           <joint name="arm_joint2" type="hinge" axis="0 0 -1"
@@ -145,7 +156,7 @@
           <geom name="arm_link2_visual" type="mesh" mesh="arm_link2_visual"
                 material="mat_green" contype="0" conaffinity="0"/>
           <geom name="arm_link2_collision" type="mesh" mesh="arm_link2_collision"
-                group="3" mass="0.032"/>
+                group="3" mass="0.032" contype="0" conaffinity="0"/>
 
           <body name="arm_link3" pos="0 -0.0829 0">
             <joint name="arm_joint3" type="hinge" axis="0 0 -1"
@@ -153,7 +164,7 @@
             <geom name="arm_link3_visual" type="mesh" mesh="arm_link3_visual"
                   material="mat_gray" contype="0" conaffinity="0"/>
             <geom name="arm_link3_collision" type="mesh" mesh="arm_link3_collision"
-                  group="3" mass="0.032"/>
+                  group="3" mass="0.032" contype="0" conaffinity="0"/>
 
             <body name="arm_link4" pos="0 -0.0829 0">
               <joint name="arm_joint4" type="hinge" axis="0 0 -1"
@@ -161,7 +172,7 @@
               <geom name="arm_link4_visual" type="mesh" mesh="arm_link4_visual"
                     material="mat_green" contype="0" conaffinity="0"/>
               <geom name="arm_link4_collision" type="mesh" mesh="arm_link4_collision"
-                    group="3" mass="0.050"/>
+                    group="3" mass="0.050" contype="0" conaffinity="0"/>
 
               <!-- Wrist camera -->
               <camera name="wrist_cam" pos="-0.0481 -0.05145 -0.0022"
@@ -172,7 +183,7 @@
                 <geom name="mono_link_visual" type="mesh" mesh="mono_link_visual"
                       material="mat_gray" contype="0" conaffinity="0"/>
                 <geom name="mono_link_collision" type="mesh" mesh="mono_link_collision"
-                      group="3" mass="0.0098"/>
+                      group="3" mass="0.0098" contype="0" conaffinity="0"/>
               </body>
 
               <body name="arm_link5" pos="-0.00215 -0.17455 0" euler="1.5708 0 0">
@@ -181,7 +192,7 @@
                 <geom name="arm_link5_visual" type="mesh" mesh="arm_link5_visual"
                       material="mat_gray" contype="0" conaffinity="0"/>
                 <geom name="arm_link5_collision" type="mesh" mesh="arm_link5_collision"
-                      group="3" mass="0.041"/>
+                      group="3" mass="0.041" contype="0" conaffinity="0"/>
 
                 <!-- Right finger: rlink1 (actuated) -> rlink2 (mimic) -->
                 <body name="rlink1" pos="-0.0035 -0.012625 -0.0685" euler="0 -1.5708 0">
@@ -190,14 +201,14 @@
                   <geom name="rlink1_visual" type="mesh" mesh="rlink1_visual"
                         material="mat_green" contype="0" conaffinity="0"/>
                   <geom name="rlink1_collision" type="mesh" mesh="rlink1_collision"
-                        group="3" mass="0.00118"/>
+                        group="3" mass="0.00118" contype="0" conaffinity="0"/>
 
                   <body name="rlink2" pos="0.03 -0.00075429 0">
                     <joint name="rlink_joint2" type="hinge" axis="0 0 1" damping="0.3"/>
                     <geom name="rlink2_visual" type="mesh" mesh="rlink2_visual"
                           material="mat_green" contype="0" conaffinity="0"/>
                     <geom name="rlink2_collision" type="mesh" mesh="rlink2_collision"
-                          group="3" mass="0.00245"/>
+                          group="3" mass="0.00245" contype="0" conaffinity="0"/>
                   </body>
                 </body>
 
@@ -207,7 +218,7 @@
                   <geom name="rlink3_visual" type="mesh" mesh="rlink3_visual"
                         material="mat_green" contype="0" conaffinity="0"/>
                   <geom name="rlink3_collision" type="mesh" mesh="rlink3_collision"
-                        group="3" mass="0.00088"/>
+                        group="3" mass="0.00088" contype="0" conaffinity="0"/>
                 </body>
 
                 <!-- Left finger: llink1 (mimic) -> llink2 (mimic) -->
@@ -216,14 +227,14 @@
                   <geom name="llink1_visual" type="mesh" mesh="llink1_visual"
                         material="mat_green" contype="0" conaffinity="0"/>
                   <geom name="llink1_collision" type="mesh" mesh="llink1_collision"
-                        group="3" mass="0.00121"/>
+                        group="3" mass="0.00121" contype="0" conaffinity="0"/>
 
                   <body name="llink2" pos="0.03 0.00065104 0">
                     <joint name="llink_joint2" type="hinge" axis="0 0 1" damping="0.3"/>
                     <geom name="llink2_visual" type="mesh" mesh="llink2_visual"
                           material="mat_green" contype="0" conaffinity="0"/>
                     <geom name="llink2_collision" type="mesh" mesh="llink2_collision"
-                          group="3" mass="0.00245"/>
+                          group="3" mass="0.00245" contype="0" conaffinity="0"/>
                   </body>
                 </body>
 
@@ -233,7 +244,7 @@
                   <geom name="llink3_visual" type="mesh" mesh="llink3_visual"
                         material="mat_green" contype="0" conaffinity="0"/>
                   <geom name="llink3_collision" type="mesh" mesh="llink3_collision"
-                        group="3" mass="0.00088"/>
+                        group="3" mass="0.00088" contype="0" conaffinity="0"/>
                 </body>
 
               </body>
@@ -251,14 +262,17 @@
     <joint joint1="grip_joint" joint2="rlink_joint3" polycoef="0 1 0 0 0"/>
     <joint joint1="grip_joint" joint2="llink_joint2" polycoef="0 1 0 0 0"/>
     <joint joint1="grip_joint" joint2="llink_joint3" polycoef="0 -1 0 0 0"/>
+    <!-- Magnetic gripper weld: activated/deactivated by bridge node -->
+    <weld name="grip_weld" body1="arm_link5" body2="target_cube" active="false"
+          solref="0.005 1" solimp="0.95 0.99 0.001"/>
   </equality>
 
   <actuator>
-    <position name="act_joint1" joint="arm_joint1" kp="50"  ctrlrange="-1.5708 1.5708"/>
-    <position name="act_joint2" joint="arm_joint2" kp="50"  ctrlrange="-1.5708 1.5708"/>
-    <position name="act_joint3" joint="arm_joint3" kp="50"  ctrlrange="-1.5708 1.5708"/>
-    <position name="act_joint4" joint="arm_joint4" kp="50"  ctrlrange="-1.5708 1.5708"/>
-    <position name="act_joint5" joint="arm_joint5" kp="30"  ctrlrange="-1.5708 3.14159"/>
-    <position name="act_grip"   joint="grip_joint" kp="20"  ctrlrange="-1.54 0"/>
+    <position name="act_joint1" joint="arm_joint1" kp="200" ctrlrange="-1.5708 1.5708"/>
+    <position name="act_joint2" joint="arm_joint2" kp="200" ctrlrange="-1.5708 1.5708"/>
+    <position name="act_joint3" joint="arm_joint3" kp="200" ctrlrange="-1.5708 1.5708"/>
+    <position name="act_joint4" joint="arm_joint4" kp="200" ctrlrange="-1.5708 1.5708"/>
+    <position name="act_joint5" joint="arm_joint5" kp="100" ctrlrange="-1.5708 3.14159"/>
+    <position name="act_grip"   joint="grip_joint" kp="500" ctrlrange="-1.54 0"/>
   </actuator>
 </mujoco>

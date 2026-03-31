@@ -18,7 +18,7 @@ dataset:
   repo_id: "local/x3plus_pick_cube"
   repo_id_ros2: "local/x3plus_ros2"  # dataset ID for ROS2-recorded episodes
   num_episodes: 100
-  place_position: [0.15, -0.15, 0.39]
+  place_position: [0.15, -0.15, 0.449]
 
 ros2:
   # Activation: source /opt/ros/jazzy/setup.bash && source activate_env.sh vla_x3plus

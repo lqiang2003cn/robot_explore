@@ -1,8 +1,8 @@
-"""ROS2 node that orchestrates X3Plus pick-and-place via MoveGroup action + py_trees.
+"""ROS2 node that orchestrates X3Plus pick-and-place via direct joint control + py_trees.
 
-Uses the MoveGroup action server for trajectory planning with position-only
-Cartesian goals (5-DOF arm cannot satisfy arbitrary orientations). Gripper
-is controlled via /x3plus_gripper_controller/commands.
+Position goals are converted to joint-space goals using a custom analytical
+IK solver.  Joints are driven by publishing to /joint_command; the MuJoCo
+bridge's position actuators handle the dynamics.
 """
 
 from __future__ import annotations
@@ -13,27 +13,23 @@ import time
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, Float64MultiArray
-from moveit_msgs.action import MoveGroup
-from moveit_msgs.msg import (
-    Constraints,
-    JointConstraint,
-    MotionPlanRequest,
-    PlanningOptions,
-    PositionConstraint,
-)
-from shape_msgs.msg import SolidPrimitive
 
 import py_trees
 
 from x3plus_pick_place.bt_nodes import build_pick_place_tree
+from x3plus_pick_place.ik_solver import forward_kinematics, solve_ik
 
 ARM_JOINT_NAMES = [f"arm_joint{i}" for i in range(1, 6)]
+
+MOVE_DURATION = 4.0
+MOVE_HZ = 25.0
+CONVERGENCE_TOL = 0.02
+CONVERGENCE_TIMEOUT = 8.0
 
 
 class PickPlaceContext:
@@ -43,12 +39,11 @@ class PickPlaceContext:
         self._node = node
         self._logger = node.get_logger()
 
-        self._move_group_client = ActionClient(node, MoveGroup, "move_action")
-        self._gripper_pub = node.create_publisher(
-            Float64MultiArray, "/x3plus_gripper_controller/commands", 10,
-        )
         self._joint_cmd_pub = node.create_publisher(
             JointState, "/joint_command", 10,
+        )
+        self._gripper_pub = node.create_publisher(
+            Float64MultiArray, "/x3plus_gripper_controller/commands", 10,
         )
         self._done_pub = node.create_publisher(Bool, "/task_complete", 10)
 
@@ -69,115 +64,115 @@ class PickPlaceContext:
         for name, pos in zip(msg.name, msg.position):
             self._current_joints[name] = pos
 
-    def _send_move_group_goal(self, goal_msg: MoveGroup.Goal) -> bool:
-        if not self._move_group_client.wait_for_server(timeout_sec=10.0):
-            self._logger.error("MoveGroup action server not available")
-            return False
+    # ── Verification helpers ──────────────────────────────────────────────
 
-        result_event = threading.Event()
-        result_holder = [None]
+    def get_arm_joints(self) -> list[float]:
+        return [self._current_joints.get(f"arm_joint{i}", 0.0) for i in range(1, 6)]
 
-        def goal_response_cb(future):
-            goal_handle = future.result()
-            if not goal_handle.accepted:
-                self._logger.error("MoveGroup goal rejected")
-                result_holder[0] = False
-                result_event.set()
-                return
-            self._logger.info("Goal accepted, waiting for result...")
-            result_future = goal_handle.get_result_async()
-            result_future.add_done_callback(result_cb)
+    def get_gripper_position(self) -> float:
+        return self._current_joints.get("grip_joint", 0.0)
 
-        def result_cb(future):
-            result = future.result()
-            if result and result.result.error_code.val == 1:
-                self._logger.info("Motion completed successfully")
-                result_holder[0] = True
-            else:
-                error_val = result.result.error_code.val if result else "timeout"
-                self._logger.error(f"Motion failed with error code: {error_val}")
-                result_holder[0] = False
-            result_event.set()
+    def get_cube_position(self) -> np.ndarray | None:
+        if self.cube_pose is not None:
+            return self.cube_pose[:3].copy()
+        return None
 
-        send_future = self._move_group_client.send_goal_async(goal_msg)
-        send_future.add_done_callback(goal_response_cb)
+    def wait_for_joint_convergence(
+        self, target: list[float], timeout: float = CONVERGENCE_TIMEOUT,
+        tolerance: float = CONVERGENCE_TOL,
+    ) -> bool:
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            current = self.get_arm_joints()
+            max_err = max(abs(c - t) for c, t in zip(current, target))
+            if max_err < tolerance:
+                return True
+            time.sleep(0.05)
+        current = self.get_arm_joints()
+        for i, (c, t) in enumerate(zip(current, target)):
+            if abs(c - t) > tolerance:
+                self._logger.warn(
+                    f"arm_joint{i+1} convergence err: |{c:.4f} - {t:.4f}| = {abs(c-t):.4f} rad"
+                )
+        return False
 
-        if not result_event.wait(timeout=60.0):
-            self._logger.error("Timed out waiting for MoveGroup result")
-            return False
+    # ── Motion primitives ─────────────────────────────────────────────────
 
-        return result_holder[0]
-
-    def move_to_pose(self, position: list[float]) -> bool:
-        """Plan and execute a position-only Cartesian goal (no orientation constraint)."""
-        goal_pose = PoseStamped()
-        goal_pose.header.frame_id = "base_link"
-        goal_pose.pose.position.x = position[0]
-        goal_pose.pose.position.y = position[1]
-        goal_pose.pose.position.z = position[2]
-        goal_pose.pose.orientation.w = 1.0
-
-        goal_msg = MoveGroup.Goal()
-        goal_msg.request = MotionPlanRequest()
-        goal_msg.request.group_name = "x3plus_arm"
-        goal_msg.request.num_planning_attempts = 10
-        goal_msg.request.allowed_planning_time = 5.0
-        goal_msg.request.max_velocity_scaling_factor = 0.3
-        goal_msg.request.max_acceleration_scaling_factor = 0.3
-
-        constraints = Constraints()
-        pos_constraint = PositionConstraint()
-        pos_constraint.header.frame_id = "base_link"
-        pos_constraint.link_name = "arm_link5"
-        bounding = SolidPrimitive()
-        bounding.type = SolidPrimitive.SPHERE
-        bounding.dimensions = [0.01]
-        pos_constraint.constraint_region.primitives.append(bounding)
-        pos_constraint.constraint_region.primitive_poses.append(goal_pose.pose)
-        pos_constraint.weight = 1.0
-        constraints.position_constraints.append(pos_constraint)
-
-        goal_msg.request.goal_constraints.append(constraints)
-
-        goal_msg.planning_options = PlanningOptions()
-        goal_msg.planning_options.plan_only = False
-        goal_msg.planning_options.replan = True
-        goal_msg.planning_options.replan_attempts = 3
-
-        self._logger.info(f"Sending position-only MoveGroup goal: pos={position}")
-        return self._send_move_group_goal(goal_msg)
+    def _send_joint_command(self, positions: list[float]) -> None:
+        cmd = JointState()
+        cmd.name = list(ARM_JOINT_NAMES)
+        cmd.position = [float(p) for p in positions]
+        self._joint_cmd_pub.publish(cmd)
 
     def move_to_joints(self, joint_positions: list[float]) -> bool:
-        """Plan and execute a joint-space goal via MoveGroup action."""
-        goal_msg = MoveGroup.Goal()
-        goal_msg.request = MotionPlanRequest()
-        goal_msg.request.group_name = "x3plus_arm"
-        goal_msg.request.num_planning_attempts = 10
-        goal_msg.request.allowed_planning_time = 5.0
-        goal_msg.request.max_velocity_scaling_factor = 0.3
-        goal_msg.request.max_acceleration_scaling_factor = 0.3
+        """Linearly interpolate from current joints to target and drive
+        via /joint_command.  Then hold and verify convergence."""
+        current = self.get_arm_joints()
+        start = np.array(current)
+        goal = np.array(joint_positions)
 
-        constraints = Constraints()
-        for name, pos in zip(ARM_JOINT_NAMES, joint_positions):
-            jc = JointConstraint()
-            jc.joint_name = name
-            jc.position = pos
-            jc.tolerance_above = 0.01
-            jc.tolerance_below = 0.01
-            jc.weight = 1.0
-            constraints.joint_constraints.append(jc)
-        goal_msg.request.goal_constraints.append(constraints)
+        n_steps = max(1, int(MOVE_DURATION * MOVE_HZ))
+        dt = 1.0 / MOVE_HZ
 
-        goal_msg.planning_options = PlanningOptions()
-        goal_msg.planning_options.plan_only = False
-        goal_msg.planning_options.replan = True
-        goal_msg.planning_options.replan_attempts = 3
+        self._logger.info(
+            f"Direct move: {[f'{c:.3f}' for c in current]} → "
+            f"{[f'{g:.3f}' for g in joint_positions]}"
+        )
 
-        self._logger.info("Sending MoveGroup joint goal")
-        return self._send_move_group_goal(goal_msg)
+        for step in range(1, n_steps + 1):
+            t = step / n_steps
+            t_smooth = 3 * t * t - 2 * t * t * t
+            interp = start + (goal - start) * t_smooth
+            self._send_joint_command(interp.tolist())
+            time.sleep(dt)
+
+        for _ in range(30):
+            self._send_joint_command(joint_positions)
+            time.sleep(0.05)
+
+        if not self.wait_for_joint_convergence(joint_positions):
+            self._logger.error("Joint convergence FAILED after direct move")
+            return False
+
+        self._logger.info("Joint convergence verified")
+        return True
+
+    def move_to_pose(self, position: list[float]) -> bool:
+        """Solve analytical IK then execute as a direct joint move."""
+        current = [
+            self._current_joints.get(f"arm_joint{i}", 0.0)
+            for i in range(1, 6)
+        ]
+        solution = solve_ik(position, q5=0.0, current=current)
+        if solution is None:
+            self._logger.error(
+                f"IK: no solution for position {position}"
+            )
+            return False
+
+        fk = forward_kinematics(solution)
+        err = np.linalg.norm(fk - np.asarray(position))
+        self._logger.info(
+            f"IK → joints [{', '.join(f'{q:.4f}' for q in solution)}]  "
+            f"FK verify [{fk[0]:.4f}, {fk[1]:.4f}, {fk[2]:.4f}]  "
+            f"err {err*1000:.2f} mm"
+        )
+        if not self.move_to_joints(solution):
+            return False
+
+        actual_joints = self.get_arm_joints()
+        fk_actual = forward_kinematics(actual_joints)
+        ee_err = np.linalg.norm(fk_actual - np.asarray(position))
+        self._logger.info(
+            f"EE post-move: actual [{fk_actual[0]:.4f}, {fk_actual[1]:.4f}, {fk_actual[2]:.4f}]  "
+            f"err {ee_err*1000:.1f} mm"
+        )
+        if ee_err > 0.02:
+            self._logger.error(f"EE error {ee_err*1000:.1f} mm exceeds 20 mm limit")
+            return False
+        return True
 
     def set_gripper(self, position: float) -> None:
-        """Publish grip_joint target via ros2_control and direct topic."""
         msg = Float64MultiArray()
         msg.data = [position]
         self._gripper_pub.publish(msg)
@@ -229,8 +224,8 @@ def main():
     if not rclpy.ok():
         return
 
-    logger.info(f"Cube pose: {ctx.cube_pose[:3]}")
-    logger.info(f"Target pose: {ctx.target_pose}")
+    logger.info(f"Cube pose (base_link): {ctx.cube_pose[:3]}")
+    logger.info(f"Target pose (base_link): {ctx.target_pose}")
 
     bb = py_trees.blackboard.Client(name="Main")
     bb.register_key(key="/ctx", access=py_trees.common.Access.WRITE)
@@ -253,7 +248,7 @@ def main():
             logger.info("BehaviorTree completed successfully!")
             break
         elif status == py_trees.common.Status.FAILURE:
-            logger.error("BehaviorTree failed -- aborting")
+            logger.error("BehaviorTree FAILED — aborting")
             break
 
         time.sleep(1.0 / rate)
