@@ -1,20 +1,31 @@
-"""py_trees BehaviorTree leaf nodes for X3Plus pick-and-place.
+"""py_trees BehaviorTree leaf nodes for X3Plus two-block pick-and-place.
 
-Adapted from panda_pick_place/bt_nodes.py for the 5-DOF X3Plus arm.
-MoveToPose uses position-only goals (no orientation constraint).
+Motion is decomposed into three kinematic groups that match the YAML-driven
+tree configuration:
 
-Every phase has a definite success criterion checked at runtime:
-  ready → pre-grasp → grasp → close gripper → lift → pre-place
-  → place → open gripper → retreat → ready
+  rotate_base_to_block   → arm_joint1 only
+  move_above_block       → arm_joint2, 3, 4 (sagittal plane IK)
+  align_wrist_to_block   → arm_joint5 only
+  open/close_gripper     → grip_joint
+
+The tree sequence is loaded from config/pick_place_tree.yaml at startup by
+``build_tree_from_config``.
 """
 
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import py_trees
+
+from x3plus_pick_place.ik_solver import (
+    compute_base_yaw,
+    cartesian_to_sagittal,
+    solve_planar_ik,
+    compute_wrist_roll,
+)
 
 if TYPE_CHECKING:
     from x3plus_pick_place.pick_place_node import PickPlaceContext
@@ -28,96 +39,55 @@ def _bb_ctx(node: py_trees.behaviour.Behaviour) -> "PickPlaceContext":
     return client.get("/ctx")
 
 
-# ── Motion leaf nodes ────────────────────────────────────────────────────────
+def _resolve_height(step: dict, config: dict) -> float:
+    """Resolve a height_offset value that may be a string key or a float."""
+    raw = step.get("height_offset", 0)
+    if isinstance(raw, str):
+        return float(config["movement"][raw])
+    return float(raw)
 
-class MoveToPose(py_trees.behaviour.Behaviour):
-    """Plan and execute a position-only Cartesian goal via MoveIt2.
 
-    Success: MoveGroup reports success AND actual EE (FK of converged joints)
-    is within 20 mm of the target position.
-    """
+def _compute_ee_z(
+    block_z: float,
+    height_offset: float,
+    config: dict,
+    stack_on_top: bool = False,
+    pick_block_half_h: float = 0.0,
+    place_block_half_h: float = 0.0,
+) -> float:
+    """Compute the EE (arm_link5) target Z for a block approach."""
+    finger_offset = config["robot"]["finger_ee_offset_z"]
+    if stack_on_top:
+        target_surface_z = block_z + place_block_half_h + pick_block_half_h
+        return target_surface_z - finger_offset + height_offset
+    return block_z - finger_offset + height_offset
 
-    def __init__(self, name: str, target_position: list[float]):
+
+# ── Wait / sensor nodes ─────────────────────────────────────────────────────
+
+class WaitForBlockPoses(py_trees.behaviour.Behaviour):
+    """Wait until both yellow and red block poses are received."""
+
+    def __init__(self, name: str = "WaitForBlockPoses"):
         super().__init__(name)
-        self._target_position = target_position
-        self._started = False
 
     def setup(self, **kwargs):
         self.ctx: PickPlaceContext = _bb_ctx(self)
 
-    def initialise(self):
-        self._started = False
-
     def update(self) -> py_trees.common.Status:
-        if not self._started:
-            self._started = True
-            self.logger.info(f"Planning to position {self._target_position}")
-            success = self.ctx.move_to_pose(self._target_position)
-            if success:
-                self.logger.info(f"Motion + EE verified for {self.name}")
-                return py_trees.common.Status.SUCCESS
-            else:
-                self.logger.error(f"Motion/verify FAILED for {self.name}")
-                return py_trees.common.Status.FAILURE
-        return py_trees.common.Status.SUCCESS
+        if self.ctx.yellow.received and self.ctx.red.received:
+            self.logger.info("Both block poses received")
+            return py_trees.common.Status.SUCCESS
+        return py_trees.common.Status.RUNNING
 
 
-class MoveToJoints(py_trees.behaviour.Behaviour):
-    """Move to a named joint configuration.
+# ── Gripper nodes ────────────────────────────────────────────────────────────
 
-    Success: MoveGroup reports success AND actual joints converge within
-    0.05 rad of each target.
-    """
-
-    def __init__(self, name: str, joint_positions: list[float]):
+class OpenGripper(py_trees.behaviour.Behaviour):
+    def __init__(self, name: str = "OpenGripper"):
         super().__init__(name)
-        self._joint_positions = joint_positions
-        self._started = False
-
-    def setup(self, **kwargs):
-        self.ctx: PickPlaceContext = _bb_ctx(self)
-
-    def initialise(self):
-        self._started = False
-
-    def update(self) -> py_trees.common.Status:
-        if not self._started:
-            self._started = True
-            self.logger.info(f"Moving to joint config: {self.name}")
-            success = self.ctx.move_to_joints(self._joint_positions)
-            if success:
-                return py_trees.common.Status.SUCCESS
-            else:
-                self.logger.error(f"Joint motion FAILED for {self.name}")
-                return py_trees.common.Status.FAILURE
-        return py_trees.common.Status.SUCCESS
-
-
-class SetGripper(py_trees.behaviour.Behaviour):
-    """Command the gripper and verify it converges.
-
-    For closing (min_closed is set): success when gripper position goes below
-    min_closed, meaning the fingers have closed enough to grip an object even
-    if the object prevents reaching the full target.
-
-    For opening (min_closed is None): success when within *tolerance* of target.
-    """
-
-    def __init__(
-        self,
-        name: str,
-        position: float,
-        timeout: float = 3.0,
-        tolerance: float = 0.5,
-        min_closed: float | None = None,
-    ):
-        super().__init__(name)
-        self._position = position
-        self._timeout = timeout
-        self._tolerance = tolerance
-        self._min_closed = min_closed
-        self._start_time: float | None = None
         self._command_sent = False
+        self._start_time: float | None = None
 
     def setup(self, **kwargs):
         self.ctx: PickPlaceContext = _bb_ctx(self)
@@ -127,45 +97,65 @@ class SetGripper(py_trees.behaviour.Behaviour):
         self._start_time = None
 
     def update(self) -> py_trees.common.Status:
+        pos = self.ctx.config["robot"]["gripper_open"]
         if not self._command_sent:
-            self.logger.info(f"Gripper → {self._position:.2f}")
-            self.ctx.set_gripper(self._position)
+            self.logger.info(f"Gripper OPEN → {pos:.2f}")
+            self.ctx.set_gripper(pos)
             self._command_sent = True
             self._start_time = time.time()
             return py_trees.common.Status.RUNNING
 
-        self.ctx.set_gripper(self._position)
+        self.ctx.set_gripper(pos)
         actual = self.ctx.get_gripper_position()
-
-        if self._min_closed is not None:
-            if actual >= self._min_closed:
-                self.logger.info(
-                    f"Gripper CLOSED OK: actual={actual:.3f} threshold={self._min_closed:.3f}"
-                )
-                return py_trees.common.Status.SUCCESS
-        else:
-            err = abs(actual - self._position)
-            if err < self._tolerance:
-                self.logger.info(
-                    f"Gripper OK: actual={actual:.3f} target={self._position:.3f}"
-                )
-                return py_trees.common.Status.SUCCESS
-
-        if time.time() - self._start_time > self._timeout:
-            self.logger.error(
-                f"Gripper TIMEOUT: actual={actual:.3f} target={self._position:.3f}"
-            )
+        if abs(actual - pos) < 0.6:
+            self.logger.info(f"Gripper OPEN OK: {actual:.3f}")
+            return py_trees.common.Status.SUCCESS
+        if time.time() - self._start_time > 6.0:
+            self.logger.error(f"Gripper OPEN TIMEOUT: {actual:.3f}")
             return py_trees.common.Status.FAILURE
-
         return py_trees.common.Status.RUNNING
 
 
-# ── Wait / sensor nodes ─────────────────────────────────────────────────────
+class CloseGripper(py_trees.behaviour.Behaviour):
+    def __init__(self, name: str = "CloseGripper"):
+        super().__init__(name)
+        self._command_sent = False
+        self._start_time: float | None = None
 
-class WaitForSettle(py_trees.behaviour.Behaviour):
-    """Wait a fixed duration to let physics settle."""
+    def setup(self, **kwargs):
+        self.ctx: PickPlaceContext = _bb_ctx(self)
 
-    def __init__(self, name: str, duration: float = 0.5):
+    def initialise(self):
+        self._command_sent = False
+        self._start_time = None
+
+    def update(self) -> py_trees.common.Status:
+        pos = self.ctx.config["robot"]["gripper_closed"]
+        threshold = self.ctx.config["robot"]["gripper_close_threshold"]
+        if not self._command_sent:
+            self.logger.info(f"Gripper CLOSE → {pos:.2f}")
+            self.ctx.set_gripper(pos)
+            self._command_sent = True
+            self._start_time = time.time()
+            return py_trees.common.Status.RUNNING
+
+        self.ctx.set_gripper(pos)
+        actual = self.ctx.get_gripper_position()
+        if actual >= threshold:
+            self.logger.info(
+                f"Gripper CLOSED OK: {actual:.3f} >= {threshold:.3f}"
+            )
+            return py_trees.common.Status.SUCCESS
+        if time.time() - self._start_time > 8.0:
+            self.logger.error(f"Gripper CLOSE TIMEOUT: {actual:.3f}")
+            return py_trees.common.Status.FAILURE
+        return py_trees.common.Status.RUNNING
+
+
+# ── Settle ───────────────────────────────────────────────────────────────────
+
+class Settle(py_trees.behaviour.Behaviour):
+    def __init__(self, name: str = "Settle", duration: float = 0.5):
         super().__init__(name)
         self._duration = duration
         self._start_time: float | None = None
@@ -179,76 +169,171 @@ class WaitForSettle(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.RUNNING
 
 
-class WaitForCubePose(py_trees.behaviour.Behaviour):
-    """Wait until a cube pose has been received from the simulator."""
+# ── Init / return ────────────────────────────────────────────────────────────
 
-    def __init__(self, name: str = "WaitForCubePose"):
+class MoveToInit(py_trees.behaviour.Behaviour):
+    """Move all arm joints to the configured init pose."""
+
+    def __init__(self, name: str = "MoveToInit"):
         super().__init__(name)
-
-    def setup(self, **kwargs):
-        self.ctx: PickPlaceContext = _bb_ctx(self)
-
-    def update(self) -> py_trees.common.Status:
-        if self.ctx.cube_pose is not None:
-            self.logger.info(f"Cube pose received: {self.ctx.cube_pose[:3]}")
-            return py_trees.common.Status.SUCCESS
-        return py_trees.common.Status.RUNNING
-
-
-# ── Verification nodes ───────────────────────────────────────────────────────
-
-class VerifyCubeGrasped(py_trees.behaviour.Behaviour):
-    """Verify the cube is held by checking its Z is above a threshold.
-
-    Called after lifting; if the cube stayed on the table, the grasp failed.
-    """
-
-    def __init__(self, name: str, min_cube_z: float, timeout: float = 2.0):
-        super().__init__(name)
-        self._min_z = min_cube_z
-        self._timeout = timeout
-        self._start_time: float | None = None
+        self._started = False
 
     def setup(self, **kwargs):
         self.ctx: PickPlaceContext = _bb_ctx(self)
 
     def initialise(self):
-        self._start_time = time.time()
+        self._started = False
 
     def update(self) -> py_trees.common.Status:
-        pos = self.ctx.get_cube_position()
-        if pos is not None and pos[2] >= self._min_z:
-            self.logger.info(
-                f"Cube grasped ✓  z={pos[2]:.4f} ≥ {self._min_z:.4f}"
-            )
-            return py_trees.common.Status.SUCCESS
-
-        if time.time() - self._start_time > self._timeout:
-            z = f"{pos[2]:.4f}" if pos is not None else "N/A"
-            self.logger.error(
-                f"Cube NOT grasped: z={z}, need ≥ {self._min_z:.4f}"
-            )
+        if not self._started:
+            self._started = True
+            joints = self.ctx.config["robot"]["init_joints"]
+            self.logger.info(f"Moving to init pose {joints}")
+            if self.ctx.move_to_joints(joints):
+                return py_trees.common.Status.SUCCESS
             return py_trees.common.Status.FAILURE
-        return py_trees.common.Status.RUNNING
+        return py_trees.common.Status.SUCCESS
 
 
-class VerifyCubePlaced(py_trees.behaviour.Behaviour):
-    """Verify the cube ended up near the target XY after release.
+# ── Decomposed motion nodes ─────────────────────────────────────────────────
 
-    Success: horizontal distance from cube to target < tolerance.
-    """
+class RotateBaseToBlock(py_trees.behaviour.Behaviour):
+    """Rotate arm_joint1 to face a named block."""
+
+    def __init__(self, name: str, block_name: str):
+        super().__init__(name)
+        self._block_name = block_name
+        self._started = False
+
+    def setup(self, **kwargs):
+        self.ctx: PickPlaceContext = _bb_ctx(self)
+
+    def initialise(self):
+        self._started = False
+
+    def update(self) -> py_trees.common.Status:
+        if not self._started:
+            self._started = True
+            block = self.ctx.get_block(self._block_name)
+            q1 = compute_base_yaw(block.position[:2])
+            if q1 is None:
+                self.logger.error(
+                    f"Cannot compute base yaw for {self._block_name}"
+                )
+                return py_trees.common.Status.FAILURE
+            self.logger.info(
+                f"RotateBase to {self._block_name}: q1={q1:.3f}"
+            )
+            if self.ctx.rotate_base(q1):
+                return py_trees.common.Status.SUCCESS
+            return py_trees.common.Status.FAILURE
+        return py_trees.common.Status.SUCCESS
+
+
+class MoveAboveBlock(py_trees.behaviour.Behaviour):
+    """Move joints 2, 3, 4 to position the EE above a named block."""
 
     def __init__(
         self,
         name: str,
-        target_xy: list[float],
-        tolerance: float = 0.05,
-        timeout: float = 3.0,
+        block_name: str,
+        height_offset: float,
+        config: dict,
+        stack_on_top: bool = False,
     ):
         super().__init__(name)
-        self._target_xy = np.array(target_xy[:2])
-        self._tolerance = tolerance
-        self._timeout = timeout
+        self._block_name = block_name
+        self._height_offset = height_offset
+        self._config = config
+        self._stack_on_top = stack_on_top
+        self._started = False
+
+    def setup(self, **kwargs):
+        self.ctx: PickPlaceContext = _bb_ctx(self)
+
+    def initialise(self):
+        self._started = False
+
+    def update(self) -> py_trees.common.Status:
+        if not self._started:
+            self._started = True
+            block = self.ctx.get_block(self._block_name)
+            q1 = self.ctx.get_arm_joints()[0]
+
+            yellow_hh = self._config["blocks"]["yellow"]["half_height"]
+            red_hh = self._config["blocks"]["red"]["half_height"]
+            if self._block_name == "red":
+                pick_hh, place_hh = yellow_hh, red_hh
+            else:
+                pick_hh, place_hh = yellow_hh, yellow_hh
+
+            ee_z = _compute_ee_z(
+                block.position[2],
+                self._height_offset,
+                self._config,
+                stack_on_top=self._stack_on_top,
+                pick_block_half_h=pick_hh,
+                place_block_half_h=place_hh,
+            )
+            target_xyz = [block.position[0], block.position[1], ee_z]
+            S, Z = cartesian_to_sagittal(target_xyz, q1)
+
+            current_q234 = self.ctx.get_arm_joints()[1:4]
+            sol = solve_planar_ik(S, Z, alpha=None, current_q234=current_q234)
+            if sol is None:
+                self.logger.error(
+                    f"Planar IK failed for {self._block_name} "
+                    f"S={S:.4f} Z={Z:.4f}"
+                )
+                return py_trees.common.Status.FAILURE
+
+            self.logger.info(
+                f"MoveAbove {self._block_name}: q234={[f'{q:.3f}' for q in sol]} "
+                f"ee_z={ee_z:.3f}"
+            )
+            if self.ctx.move_in_plane(sol):
+                return py_trees.common.Status.SUCCESS
+            return py_trees.common.Status.FAILURE
+        return py_trees.common.Status.SUCCESS
+
+
+class AlignWristToBlock(py_trees.behaviour.Behaviour):
+    """Rotate arm_joint5 to match a block's yaw orientation."""
+
+    def __init__(self, name: str, block_name: str):
+        super().__init__(name)
+        self._block_name = block_name
+        self._started = False
+
+    def setup(self, **kwargs):
+        self.ctx: PickPlaceContext = _bb_ctx(self)
+
+    def initialise(self):
+        self._started = False
+
+    def update(self) -> py_trees.common.Status:
+        if not self._started:
+            self._started = True
+            block = self.ctx.get_block(self._block_name)
+            q1 = self.ctx.get_arm_joints()[0]
+            q5 = compute_wrist_roll(block.yaw, q1)
+            self.logger.info(
+                f"AlignWrist to {self._block_name}: "
+                f"block_yaw={block.yaw:.3f} q1={q1:.3f} → q5={q5:.3f}"
+            )
+            if self.ctx.align_wrist(q5):
+                return py_trees.common.Status.SUCCESS
+            return py_trees.common.Status.FAILURE
+        return py_trees.common.Status.SUCCESS
+
+
+# ── Verification nodes ───────────────────────────────────────────────────────
+
+class VerifyGrasp(py_trees.behaviour.Behaviour):
+    """Verify the yellow block Z is elevated after lifting."""
+
+    def __init__(self, name: str = "VerifyGrasp"):
+        super().__init__(name)
         self._start_time: float | None = None
 
     def setup(self, **kwargs):
@@ -258,32 +343,66 @@ class VerifyCubePlaced(py_trees.behaviour.Behaviour):
         self._start_time = time.time()
 
     def update(self) -> py_trees.common.Status:
-        pos = self.ctx.get_cube_position()
-        if pos is not None:
-            err_xy = float(np.linalg.norm(pos[:2] - self._target_xy))
-            if err_xy < self._tolerance:
+        block = self.ctx.yellow
+        lift_h = self.ctx.config["movement"]["lift_height"]
+        if block.position is not None:
+            yellow_hh = self.ctx.config["blocks"]["yellow"]["half_height"]
+            min_z = yellow_hh + lift_h * 0.3
+            if block.position[2] >= min_z:
                 self.logger.info(
-                    f"Cube placed ✓  XY err={err_xy*1000:.1f} mm"
+                    f"Grasp verified: z={block.position[2]:.4f} >= {min_z:.4f}"
                 )
                 return py_trees.common.Status.SUCCESS
-
-        if time.time() - self._start_time > self._timeout:
-            if pos is not None:
-                err_xy = float(np.linalg.norm(pos[:2] - self._target_xy))
-                self.logger.error(
-                    f"Cube NOT at target: XY err={err_xy*1000:.1f} mm "
-                    f"> {self._tolerance*1000:.0f} mm"
-                )
-            else:
-                self.logger.error("Cube pose unavailable")
+        if time.time() - self._start_time > 2.0:
+            z = f"{block.position[2]:.4f}" if block.position is not None else "N/A"
+            self.logger.error(f"Grasp FAILED: z={z}")
             return py_trees.common.Status.FAILURE
         return py_trees.common.Status.RUNNING
 
 
-class SignalTaskComplete(py_trees.behaviour.Behaviour):
-    """Publish task_complete=True to signal the simulator."""
+class VerifyPlacement(py_trees.behaviour.Behaviour):
+    """Verify the yellow block XY is near the red block XY."""
 
-    def __init__(self, name: str = "SignalTaskComplete"):
+    def __init__(self, name: str = "VerifyPlacement", tolerance: float = 0.05):
+        super().__init__(name)
+        self._tolerance = tolerance
+        self._start_time: float | None = None
+
+    def setup(self, **kwargs):
+        self.ctx: PickPlaceContext = _bb_ctx(self)
+
+    def initialise(self):
+        self._start_time = time.time()
+
+    def update(self) -> py_trees.common.Status:
+        yellow = self.ctx.yellow
+        red = self.ctx.red
+        if yellow.position is not None and red.position is not None:
+            err_xy = float(np.linalg.norm(
+                yellow.position[:2] - red.position[:2]
+            ))
+            if err_xy < self._tolerance:
+                self.logger.info(f"Placement verified: XY err={err_xy*1000:.1f} mm")
+                return py_trees.common.Status.SUCCESS
+        if time.time() - self._start_time > 3.0:
+            if yellow.position is not None and red.position is not None:
+                err_xy = float(np.linalg.norm(
+                    yellow.position[:2] - red.position[:2]
+                ))
+                self.logger.error(
+                    f"Placement FAILED: XY err={err_xy*1000:.1f} mm "
+                    f"> {self._tolerance*1000:.0f} mm"
+                )
+            else:
+                self.logger.error("Block pose unavailable for verification")
+            return py_trees.common.Status.FAILURE
+        return py_trees.common.Status.RUNNING
+
+
+class SignalComplete(py_trees.behaviour.Behaviour):
+    """Publish task_complete=True."""
+
+    def __init__(self, name: str = "SignalComplete"):
         super().__init__(name)
 
     def setup(self, **kwargs):
@@ -295,76 +414,54 @@ class SignalTaskComplete(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.SUCCESS
 
 
-# ── Tree builder ─────────────────────────────────────────────────────────────
+# ── YAML-driven tree builder ────────────────────────────────────────────────
 
-FINGER_EE_OFFSET_Z = 0.039
+_ACTION_MAP = {
+    "wait_for_block_poses": lambda _s, _c: WaitForBlockPoses(),
+    "open_gripper": lambda _s, _c: OpenGripper(),
+    "close_gripper": lambda _s, _c: CloseGripper(),
+    "settle": lambda s, c: Settle(
+        duration=c["movement"].get("settle_time", 0.5),
+    ),
+    "move_to_init": lambda _s, _c: MoveToInit(),
+    "verify_grasp": lambda _s, _c: VerifyGrasp(),
+    "verify_placement": lambda _s, _c: VerifyPlacement(),
+    "signal_complete": lambda _s, _c: SignalComplete(),
+}
 
-def build_pick_place_tree(
-    cube_pos: list[float],
-    place_pos: list[float],
-    gripper_open: float = -1.54,
-    gripper_closed: float = 0.0,
-    settle_time: float = 0.8,
-    lift_height: float = 0.05,
-) -> py_trees.behaviour.Behaviour:
-    """Build the pick-and-place BehaviorTree for the X3Plus arm.
 
-    The gripper fingers sit ~FINGER_EE_OFFSET_Z above the arm_link5 origin
-    (IK end-effector) due to the wrist angle. EE targets are offset downward
-    so that the physical fingers align with the cube/place heights.
-    """
-    grasp_ee_z = cube_pos[2] - FINGER_EE_OFFSET_Z
-    place_ee_z = place_pos[2] - FINGER_EE_OFFSET_Z
+def _build_node(step: dict, config: dict, idx: int) -> py_trees.behaviour.Behaviour:
+    action = step["action"]
+    factory = _ACTION_MAP.get(action)
+    if factory is not None:
+        node = factory(step, config)
+        node.name = f"{action}_{idx}"
+        return node
 
-    pre_grasp = [cube_pos[0], cube_pos[1], grasp_ee_z + lift_height]
-    grasp     = [cube_pos[0], cube_pos[1], grasp_ee_z]
-    lift      = [cube_pos[0], cube_pos[1], grasp_ee_z + lift_height]
-    pre_place = [place_pos[0], place_pos[1], place_ee_z + lift_height]
-    place     = [place_pos[0], place_pos[1], place_ee_z]
+    block_name = step.get("block", "")
+    label = f"{action}_{block_name}_{idx}"
 
-    ready_joints = [0.0, -0.5, 0.5, -0.5, 0.0]
+    if action == "rotate_base_to_block":
+        return RotateBaseToBlock(label, block_name)
 
-    cube_lifted_min_z = cube_pos[2] + lift_height * 0.3
+    if action in ("move_above_block", "lift_block", "retreat_above_block"):
+        height_offset = _resolve_height(step, config)
+        stack_on_top = step.get("stack_on_top", False)
+        return MoveAboveBlock(
+            label, block_name, height_offset, config,
+            stack_on_top=stack_on_top,
+        )
 
+    if action == "align_wrist_to_block":
+        return AlignWristToBlock(label, block_name)
+
+    raise ValueError(f"Unknown BT action: {action}")
+
+
+def build_tree_from_config(config: dict) -> py_trees.behaviour.Behaviour:
+    """Build a py_trees Sequence from a YAML config dict."""
+    steps = config["tree"]
+    children = [_build_node(step, config, i) for i, step in enumerate(steps)]
     root = py_trees.composites.Sequence("PickAndPlace", memory=True)
-    root.add_children([
-        WaitForCubePose("WaitForCubePose"),
-        SetGripper("OpenGripperInit", gripper_open, timeout=6.0, tolerance=0.6),
-        WaitForSettle("SettleInit", settle_time),
-
-        MoveToJoints("MoveToReady", ready_joints),
-        WaitForSettle("SettleReady", settle_time),
-
-        MoveToPose("MoveToPreGrasp", pre_grasp),
-        WaitForSettle("SettlePreGrasp", 0.5),
-
-        MoveToPose("MoveToGrasp", grasp),
-        WaitForSettle("SettleGrasp", 0.5),
-
-        SetGripper("CloseGripper", gripper_closed, timeout=8.0, min_closed=-0.35),
-        WaitForSettle("SettleGripperClose", settle_time),
-
-        MoveToPose("LiftCube", lift),
-        WaitForSettle("SettleLift", 0.8),
-        VerifyCubeGrasped("VerifyLift", cube_lifted_min_z),
-
-        MoveToPose("MoveToPrePlace", pre_place),
-        WaitForSettle("SettlePrePlace", 0.5),
-        VerifyCubeGrasped("VerifyTransit", cube_lifted_min_z),
-
-        MoveToPose("MoveToPlace", place),
-        WaitForSettle("SettlePlace", 0.5),
-
-        SetGripper("OpenGripperRelease", gripper_open, timeout=6.0, tolerance=0.6),
-        WaitForSettle("SettleRelease", settle_time),
-
-        MoveToPose("Retreat", pre_place),
-        WaitForSettle("SettleRetreat", 0.5),
-
-        MoveToJoints("ReturnToReady", ready_joints),
-        WaitForSettle("SettleFinal", settle_time),
-        VerifyCubePlaced("VerifyPlacement", place_pos, tolerance=0.05),
-
-        SignalTaskComplete(),
-    ])
+    root.add_children(children)
     return root

@@ -1,16 +1,27 @@
-"""ROS2 node that orchestrates X3Plus pick-and-place via direct joint control + py_trees.
+"""ROS2 node that orchestrates X3Plus pick-and-place via decomposed motion.
 
-Position goals are converted to joint-space goals using a custom analytical
-IK solver.  Joints are driven by publishing to /joint_command; the MuJoCo
-bridge's position actuators handle the dynamics.
+Motion is decomposed into three kinematic groups driven by a YAML-configured
+behavior tree:
+
+  - arm_joint1          → base yaw (horizontal rotation)
+  - arm_joint2/3/4      → sagittal-plane reach + height
+  - arm_joint5          → wrist roll (orientation alignment)
+  - grip_joint          → finger open / close
+
+Position goals are solved with constrained analytical IK.  Joints are driven
+by publishing to /joint_command; the MuJoCo bridge's position actuators
+handle the dynamics.
 """
 
 from __future__ import annotations
 
+import math
 import threading
 import time
+from typing import Any
 
 import numpy as np
+import yaml
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -18,11 +29,11 @@ from rclpy.executors import MultiThreadedExecutor
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, Float64MultiArray
+from ament_index_python.packages import get_package_share_directory
 
 import py_trees
 
-from x3plus_pick_place.bt_nodes import build_pick_place_tree
-from x3plus_pick_place.ik_solver import forward_kinematics, solve_ik
+from x3plus_pick_place.bt_nodes import build_tree_from_config
 
 ARM_JOINT_NAMES = [f"arm_joint{i}" for i in range(1, 6)]
 
@@ -32,12 +43,38 @@ CONVERGENCE_TOL = 0.02
 CONVERGENCE_TIMEOUT = 8.0
 
 
+def quat_to_yaw(w: float, x: float, y: float, z: float) -> float:
+    """Extract yaw (rotation about Z) from a quaternion."""
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    return math.atan2(siny_cosp, cosy_cosp)
+
+
+class BlockState:
+    """Tracked state for a single block (position + orientation)."""
+
+    def __init__(self) -> None:
+        self.position: np.ndarray | None = None
+        self.yaw: float | None = None
+
+    def update(self, msg: PoseStamped) -> None:
+        p = msg.pose.position
+        o = msg.pose.orientation
+        self.position = np.array([p.x, p.y, p.z])
+        self.yaw = quat_to_yaw(o.w, o.x, o.y, o.z)
+
+    @property
+    def received(self) -> bool:
+        return self.position is not None
+
+
 class PickPlaceContext:
     """Shared context between BT nodes and the ROS2 node."""
 
-    def __init__(self, node: Node):
+    def __init__(self, node: Node, config: dict[str, Any]):
         self._node = node
         self._logger = node.get_logger()
+        self.config = config
 
         self._joint_cmd_pub = node.create_publisher(
             JointState, "/joint_command", 10,
@@ -47,24 +84,22 @@ class PickPlaceContext:
         )
         self._done_pub = node.create_publisher(Bool, "/task_complete", 10)
 
-        self.cube_pose: np.ndarray | None = None
-        self.target_pose: np.ndarray | None = None
+        self.yellow = BlockState()
+        self.red = BlockState()
         self._current_joints: dict[str, float] = {}
 
-    def update_cube_pose(self, msg: PoseStamped) -> None:
-        p = msg.pose.position
-        o = msg.pose.orientation
-        self.cube_pose = np.array([p.x, p.y, p.z, o.w, o.x, o.y, o.z])
+    def get_block(self, name: str) -> BlockState:
+        if name == "yellow":
+            return self.yellow
+        elif name == "red":
+            return self.red
+        raise ValueError(f"Unknown block: {name}")
 
-    def update_target_pose(self, msg: PoseStamped) -> None:
-        p = msg.pose.position
-        self.target_pose = np.array([p.x, p.y, p.z])
+    # ── Joint state helpers ────────────────────────────────────────────────
 
     def update_joints(self, msg: JointState) -> None:
         for name, pos in zip(msg.name, msg.position):
             self._current_joints[name] = pos
-
-    # ── Verification helpers ──────────────────────────────────────────────
 
     def get_arm_joints(self) -> list[float]:
         return [self._current_joints.get(f"arm_joint{i}", 0.0) for i in range(1, 6)]
@@ -72,104 +107,126 @@ class PickPlaceContext:
     def get_gripper_position(self) -> float:
         return self._current_joints.get("grip_joint", 0.0)
 
-    def get_cube_position(self) -> np.ndarray | None:
-        if self.cube_pose is not None:
-            return self.cube_pose[:3].copy()
-        return None
-
     def wait_for_joint_convergence(
-        self, target: list[float], timeout: float = CONVERGENCE_TIMEOUT,
+        self,
+        target: list[float],
+        joint_names: list[str] | None = None,
+        timeout: float = CONVERGENCE_TIMEOUT,
         tolerance: float = CONVERGENCE_TOL,
     ) -> bool:
+        if joint_names is None:
+            joint_names = list(ARM_JOINT_NAMES)
         t0 = time.time()
         while time.time() - t0 < timeout:
-            current = self.get_arm_joints()
-            max_err = max(abs(c - t) for c, t in zip(current, target))
-            if max_err < tolerance:
+            errs = [
+                abs(self._current_joints.get(n, 0.0) - t)
+                for n, t in zip(joint_names, target)
+            ]
+            if max(errs) < tolerance:
                 return True
             time.sleep(0.05)
-        current = self.get_arm_joints()
-        for i, (c, t) in enumerate(zip(current, target)):
+        for n, t in zip(joint_names, target):
+            c = self._current_joints.get(n, 0.0)
             if abs(c - t) > tolerance:
                 self._logger.warn(
-                    f"arm_joint{i+1} convergence err: |{c:.4f} - {t:.4f}| = {abs(c-t):.4f} rad"
+                    f"{n} convergence err: |{c:.4f} - {t:.4f}| = {abs(c-t):.4f} rad"
                 )
         return False
 
-    # ── Motion primitives ─────────────────────────────────────────────────
+    # ── Low-level joint command ────────────────────────────────────────────
 
-    def _send_joint_command(self, positions: list[float]) -> None:
+    def _send_joint_command(self, names: list[str], positions: list[float]) -> None:
         cmd = JointState()
-        cmd.name = list(ARM_JOINT_NAMES)
+        cmd.name = list(names)
         cmd.position = [float(p) for p in positions]
         self._joint_cmd_pub.publish(cmd)
 
-    def move_to_joints(self, joint_positions: list[float]) -> bool:
-        """Linearly interpolate from current joints to target and drive
-        via /joint_command.  Then hold and verify convergence."""
-        current = self.get_arm_joints()
-        start = np.array(current)
-        goal = np.array(joint_positions)
-
-        n_steps = max(1, int(MOVE_DURATION * MOVE_HZ))
+    def _interpolate_joints(
+        self,
+        names: list[str],
+        start: np.ndarray,
+        goal: np.ndarray,
+        duration: float = MOVE_DURATION,
+    ) -> None:
+        n_steps = max(1, int(duration * MOVE_HZ))
         dt = 1.0 / MOVE_HZ
-
-        self._logger.info(
-            f"Direct move: {[f'{c:.3f}' for c in current]} → "
-            f"{[f'{g:.3f}' for g in joint_positions]}"
-        )
-
         for step in range(1, n_steps + 1):
             t = step / n_steps
             t_smooth = 3 * t * t - 2 * t * t * t
             interp = start + (goal - start) * t_smooth
-            self._send_joint_command(interp.tolist())
+            self._send_joint_command(names, interp.tolist())
             time.sleep(dt)
-
         for _ in range(30):
-            self._send_joint_command(joint_positions)
+            self._send_joint_command(names, goal.tolist())
             time.sleep(0.05)
 
-        if not self.wait_for_joint_convergence(joint_positions):
-            self._logger.error("Joint convergence FAILED after direct move")
-            return False
+    # ── Decomposed motion primitives ───────────────────────────────────────
 
-        self._logger.info("Joint convergence verified")
+    def move_to_joints(self, joint_positions: list[float]) -> bool:
+        """Move all 5 arm joints to target positions."""
+        current = np.array(self.get_arm_joints())
+        goal = np.array(joint_positions)
+        self._logger.info(
+            f"MoveAll: {[f'{c:.3f}' for c in current]} → "
+            f"{[f'{g:.3f}' for g in joint_positions]}"
+        )
+        self._interpolate_joints(list(ARM_JOINT_NAMES), current, goal)
+        if not self.wait_for_joint_convergence(joint_positions):
+            self._logger.error("Joint convergence FAILED (move_to_joints)")
+            return False
+        self._logger.info("Joint convergence verified (move_to_joints)")
         return True
 
-    def move_to_pose(self, position: list[float]) -> bool:
-        """Solve analytical IK then execute as a direct joint move."""
-        current = [
-            self._current_joints.get(f"arm_joint{i}", 0.0)
-            for i in range(1, 6)
-        ]
-        solution = solve_ik(position, q5=0.0, current=current)
-        if solution is None:
-            self._logger.error(
-                f"IK: no solution for position {position}"
-            )
-            return False
-
-        fk = forward_kinematics(solution)
-        err = np.linalg.norm(fk - np.asarray(position))
-        self._logger.info(
-            f"IK → joints [{', '.join(f'{q:.4f}' for q in solution)}]  "
-            f"FK verify [{fk[0]:.4f}, {fk[1]:.4f}, {fk[2]:.4f}]  "
-            f"err {err*1000:.2f} mm"
+    def rotate_base(self, target_yaw: float) -> bool:
+        """Rotate only arm_joint1 to face a direction."""
+        current = self._current_joints.get("arm_joint1", 0.0)
+        self._logger.info(f"RotateBase: {current:.3f} → {target_yaw:.3f}")
+        self._interpolate_joints(
+            ["arm_joint1"],
+            np.array([current]),
+            np.array([target_yaw]),
+            duration=2.0,
         )
-        if not self.move_to_joints(solution):
+        if not self.wait_for_joint_convergence(
+            [target_yaw], ["arm_joint1"], timeout=4.0,
+        ):
+            self._logger.error("RotateBase convergence FAILED")
             return False
+        self._logger.info("RotateBase OK")
+        return True
 
-        actual_joints = self.get_arm_joints()
-        fk_actual = forward_kinematics(actual_joints)
-        ee_err = np.linalg.norm(fk_actual - np.asarray(position))
+    def move_in_plane(self, q234: list[float]) -> bool:
+        """Move joints 2, 3, 4 in the sagittal plane."""
+        names = ["arm_joint2", "arm_joint3", "arm_joint4"]
+        current = np.array([self._current_joints.get(n, 0.0) for n in names])
+        goal = np.array(q234)
         self._logger.info(
-            f"EE post-move: actual [{fk_actual[0]:.4f}, {fk_actual[1]:.4f}, {fk_actual[2]:.4f}]  "
-            f"err {ee_err*1000:.1f} mm"
+            f"MoveInPlane: {[f'{c:.3f}' for c in current]} → "
+            f"{[f'{g:.3f}' for g in q234]}"
         )
-        if ee_err > 0.02:
-            self._logger.error(f"EE error {ee_err*1000:.1f} mm exceeds 20 mm limit")
+        self._interpolate_joints(names, current, goal)
+        if not self.wait_for_joint_convergence(q234, names):
+            self._logger.error("MoveInPlane convergence FAILED")
             return False
+        self._logger.info("MoveInPlane OK")
+        return True
+
+    def align_wrist(self, target_angle: float) -> bool:
+        """Rotate arm_joint5 to align gripper with block orientation."""
+        current = self._current_joints.get("arm_joint5", 0.0)
+        self._logger.info(f"AlignWrist: {current:.3f} → {target_angle:.3f}")
+        self._interpolate_joints(
+            ["arm_joint5"],
+            np.array([current]),
+            np.array([target_angle]),
+            duration=1.5,
+        )
+        if not self.wait_for_joint_convergence(
+            [target_angle], ["arm_joint5"], timeout=4.0,
+        ):
+            self._logger.error("AlignWrist convergence FAILED")
+            return False
+        self._logger.info("AlignWrist OK")
         return True
 
     def set_gripper(self, position: float) -> None:
@@ -190,21 +247,34 @@ class PickPlaceContext:
             time.sleep(0.05)
 
 
+def _load_config(node: Node) -> dict[str, Any]:
+    share = get_package_share_directory("x3plus_pick_place")
+    config_path = f"{share}/config/pick_place_tree.yaml"
+    node.get_logger().info(f"Loading BT config from {config_path}")
+    with open(config_path) as f:
+        return yaml.safe_load(f)
+
+
 def main():
     rclpy.init()
 
     node = rclpy.create_node("x3plus_pick_place_orchestrator")
     logger = node.get_logger()
 
-    ctx = PickPlaceContext(node)
+    config = _load_config(node)
+    ctx = PickPlaceContext(node, config)
 
     cb_group = ReentrantCallbackGroup()
+
+    yellow_topic = config["blocks"]["yellow"]["topic"]
+    red_topic = config["blocks"]["red"]["topic"]
+
     node.create_subscription(
-        PoseStamped, "/cube_pose", ctx.update_cube_pose, 10,
+        PoseStamped, yellow_topic, ctx.yellow.update, 10,
         callback_group=cb_group,
     )
     node.create_subscription(
-        PoseStamped, "/target_place_pose", ctx.update_target_pose, 10,
+        PoseStamped, red_topic, ctx.red.update, 10,
         callback_group=cb_group,
     )
     node.create_subscription(
@@ -217,24 +287,25 @@ def main():
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
 
-    logger.info("Waiting for cube and target poses from simulator ...")
-    while rclpy.ok() and (ctx.cube_pose is None or ctx.target_pose is None):
+    logger.info("Waiting for block poses from simulator ...")
+    while rclpy.ok() and not (ctx.yellow.received and ctx.red.received):
         time.sleep(0.1)
 
     if not rclpy.ok():
         return
 
-    logger.info(f"Cube pose (base_link): {ctx.cube_pose[:3]}")
-    logger.info(f"Target pose (base_link): {ctx.target_pose}")
+    logger.info(
+        f"Yellow block: pos={ctx.yellow.position} yaw={ctx.yellow.yaw:.2f}"
+    )
+    logger.info(
+        f"Red block: pos={ctx.red.position} yaw={ctx.red.yaw:.2f}"
+    )
 
     bb = py_trees.blackboard.Client(name="Main")
     bb.register_key(key="/ctx", access=py_trees.common.Access.WRITE)
     bb.set("/ctx", ctx)
 
-    tree = build_pick_place_tree(
-        cube_pos=ctx.cube_pose[:3].tolist(),
-        place_pos=ctx.target_pose.tolist(),
-    )
+    tree = build_tree_from_config(config)
     tree.setup_with_descendants()
 
     logger.info("Running BehaviorTree pick-and-place sequence ...")

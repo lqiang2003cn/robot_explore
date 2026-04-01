@@ -32,7 +32,9 @@
               specular="0.5" shininess="0.4" reflectance="0.05"/>
     <material name="mat_gray" rgba="0.72 0.72 0.74 1"
               specular="0.6" shininess="0.5" reflectance="0.08"/>
-    <material name="mat_target" rgba="0.88 0.12 0.10 1"
+    <material name="mat_red" rgba="0.88 0.12 0.10 1"
+              specular="0.7" shininess="0.6" reflectance="0.1" emission="0.08"/>
+    <material name="mat_yellow" rgba="0.95 0.85 0.10 1"
               specular="0.7" shininess="0.6" reflectance="0.1" emission="0.08"/>
     <material name="mat_table" texture="textable" texrepeat="2 2"
               specular="0.3" shininess="0.2" reflectance="0.05"/>
@@ -98,21 +100,19 @@
       <geom name="leg4" type="cylinder" fromto=" 0.25  0.25 -0.35  0.25  0.25 -0.02" size="0.02" material="mat_table"/>
     </body>
 
-    <!-- ====== Pedestals for pick and place (narrow cylinders) ====== -->
-    <body name="pick_pedestal" pos="0.15 0.08 0.404">
-      <geom name="pick_pedestal_geom" type="cylinder" size="0.008 0.034"
-            rgba="0.6 0.6 0.6 1" mass="5"/>
-    </body>
-    <body name="place_pedestal" pos="0.15 -0.15 0.404">
-      <geom name="place_pedestal_geom" type="cylinder" size="0.008 0.034"
-            rgba="0.4 0.7 0.4 1" mass="5"/>
+    <!-- ====== Yellow block (to be picked up) ====== -->
+    <body name="yellow_block" pos="0.12 0.06 0.384">
+      <freejoint name="yellow_joint"/>
+      <geom name="yellow_geom" type="box" size="0.012 0.012 0.014" mass="0.02"
+            material="mat_yellow" friction="1.5 0.05 0.01"
+            solref="0.01 1" solimp="0.95 0.99 0.001"/>
     </body>
 
-    <!-- ====== Target cube (free body, sits on pick pedestal) ====== -->
-    <body name="target_cube" pos="0.15 0.08 0.451">
-      <freejoint name="cube_joint"/>
-      <geom name="cube" type="box" size="0.012 0.012 0.014" mass="0.02"
-            material="mat_target" friction="1.5 0.05 0.01"
+    <!-- ====== Red block (place target) ====== -->
+    <body name="red_block" pos="0.12 -0.06 0.384">
+      <freejoint name="red_joint"/>
+      <geom name="red_geom" type="box" size="0.012 0.012 0.014" mass="0.02"
+            material="mat_red" friction="1.5 0.05 0.01"
             solref="0.01 1" solimp="0.95 0.99 0.001"/>
     </body>
 
@@ -262,8 +262,8 @@
     <joint joint1="grip_joint" joint2="rlink_joint3" polycoef="0 1 0 0 0"/>
     <joint joint1="grip_joint" joint2="llink_joint2" polycoef="0 1 0 0 0"/>
     <joint joint1="grip_joint" joint2="llink_joint3" polycoef="0 -1 0 0 0"/>
-    <!-- Magnetic gripper weld: activated/deactivated by bridge node -->
-    <weld name="grip_weld" body1="arm_link5" body2="target_cube" active="false"
+    <!-- Magnetic gripper weld for yellow block (picked up) -->
+    <weld name="yellow_weld" body1="arm_link5" body2="yellow_block" active="false"
           solref="0.005 1" solimp="0.95 0.99 0.001"/>
   </equality>
 

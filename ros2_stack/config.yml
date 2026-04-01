@@ -11,10 +11,9 @@ franka:
   lift_height: 0.15
 
 x3plus:
-  cube_position: [0.15, 0.0, 0.39]
-  place_position: [0.15, -0.15, 0.39]
-  grasp_offset_z: 0.02
-  gripper_open: 0.0            # grip_joint = 0 (open)
-  gripper_closed: -1.54        # grip_joint = -1.54 (closed)
+  # Two-block task: pick yellow, place on red (both randomly placed).
+  # Full BT configuration lives in x3plus_pick_place/config/pick_place_tree.yaml.
+  gripper_open: -1.54           # grip_joint open position
+  gripper_closed: 0.0           # grip_joint closed position
   settle_time: 0.5
-  lift_height: 0.06
+  lift_height: 0.05

@@ -1,10 +1,11 @@
-"""Launch file for the X3Plus pick-and-place (direct-control mode).
+"""Launch file for the X3Plus two-block pick-and-place.
 
 Only starts the BT orchestrator node. The MuJoCo bridge must be running
-separately — it provides /joint_states, /cube_pose, /target_place_pose
+separately — it provides /joint_states, /yellow_block_pose, /red_block_pose
 and accepts /joint_command.
 
-No MoveIt, controller_manager, or ros2_control stack needed.
+BT configuration is loaded from config/pick_place_tree.yaml (installed into
+the package share directory).
 """
 
 from launch import LaunchDescription

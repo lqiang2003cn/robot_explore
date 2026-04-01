@@ -1,21 +1,25 @@
-"""ROS2-to-MuJoCo bridge for the X3Plus arm.
+"""ROS2-to-MuJoCo bridge for the X3Plus arm (two-block pick-and-place).
 
 A pure translator between ROS2 topics and the MuJoCo simulation. Receives
 absolute joint position commands on /joint_command and drives the MuJoCo
-position actuators directly. Publishes joint states, cube pose, target
-place pose, and front-camera images.
+position actuators directly. Publishes joint states, block poses (yellow
+and red with orientation), and front-camera images.
+
+On startup, both blocks are randomly placed on the table within configurable
+bounds and with random yaw orientations.
 
 Usage:
     source /opt/ros/jazzy/setup.bash
     source activate_env.sh vla_x3plus
     python -m src.mujoco_bridge_node
-    python -m src.mujoco_bridge_node --place-pos 0.15 -0.15 0.39
     python -m src.mujoco_bridge_node --record-video output/bt_pick_place.mp4
+    python -m src.mujoco_bridge_node --seed 42
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import pathlib
 import threading
@@ -28,8 +32,8 @@ import yaml
 
 import rclpy
 from rclpy.node import Node
-from rclpy.executors import MultiThreadedExecutor, SingleThreadedExecutor
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.executors import SingleThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
 from sensor_msgs.msg import JointState, Image
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool
@@ -48,16 +52,53 @@ ALL_JOINT_NAMES = [
     "llink_joint1", "llink_joint2", "llink_joint3",
 ]
 
+TABLE_TOP_Z = 0.37
+BLOCK_HALF_H = 0.014
+BLOCK_ON_TABLE_Z = TABLE_TOP_Z + BLOCK_HALF_H
+
+BLOCK_X_RANGE = (0.05, 0.22)
+BLOCK_Y_RANGE = (-0.15, 0.15)
+BLOCK_MIN_SEPARATION = 0.06
+
+
+def _yaw_to_quat(yaw: float) -> np.ndarray:
+    """Convert a yaw angle (rad) to MuJoCo quaternion [w, x, y, z]."""
+    return np.array([math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)])
+
+
+def _randomize_block_poses(
+    rng: np.random.Generator,
+    x_range: tuple[float, float] = BLOCK_X_RANGE,
+    y_range: tuple[float, float] = BLOCK_Y_RANGE,
+    min_sep: float = BLOCK_MIN_SEPARATION,
+) -> tuple[np.ndarray, float, np.ndarray, float]:
+    """Return (yellow_pos, yellow_yaw, red_pos, red_yaw) in world frame."""
+    for _ in range(200):
+        yx = rng.uniform(x_range[0], x_range[1])
+        yy = rng.uniform(y_range[0], y_range[1])
+        rx = rng.uniform(x_range[0], x_range[1])
+        ry = rng.uniform(y_range[0], y_range[1])
+        if math.hypot(yx - rx, yy - ry) >= min_sep:
+            y_yaw = rng.uniform(-math.pi, math.pi)
+            r_yaw = rng.uniform(-math.pi, math.pi)
+            return (
+                np.array([yx, yy, BLOCK_ON_TABLE_Z]),
+                y_yaw,
+                np.array([rx, ry, BLOCK_ON_TABLE_Z]),
+                r_yaw,
+            )
+    raise RuntimeError("Could not place two blocks with sufficient separation")
+
 
 class MuJoCoBridgeNode(Node):
     def __init__(
         self,
         model_path: str,
-        place_position: list[float],
         camera_name: str = "front_cam",
         resolution: tuple[int, int] = (256, 256),
         record_video: str | None = None,
         video_fps: int = 30,
+        seed: int | None = None,
     ):
         super().__init__("mujoco_bridge")
 
@@ -68,7 +109,6 @@ class MuJoCoBridgeNode(Node):
         self._renderer = mujoco.Renderer(self._model, height=h, width=w)
         self._camera_name = camera_name
         self._resolution = resolution
-        self._place_position = np.array(place_position, dtype=np.float64)
 
         self._record_video_path = record_video
         self._video_fps = video_fps
@@ -94,23 +134,34 @@ class MuJoCoBridgeNode(Node):
             for name in ALL_JOINT_NAMES
         }
 
-        mujoco.mj_forward(self._model, self._data)
-
-        self._base_link_pos = self._data.body("base_link").xpos.copy()
-        self._place_in_base = self._place_position - self._base_link_pos
-
-        weld_id = mujoco.mj_name2id(
-            self._model, mujoco.mjtObj.mjOBJ_EQUALITY, "grip_weld",
+        self._yellow_body_id = mujoco.mj_name2id(
+            self._model, mujoco.mjtObj.mjOBJ_BODY, "yellow_block",
         )
-        self._weld_eq_id = weld_id
-        self._grip_attached = False
-        self._grip_ctrl_idx = self._actuator_ctrl_idx["grip_joint"]
-        self._cube_body_id = mujoco.mj_name2id(
-            self._model, mujoco.mjtObj.mjOBJ_BODY, "target_cube",
+        self._red_body_id = mujoco.mj_name2id(
+            self._model, mujoco.mjtObj.mjOBJ_BODY, "red_block",
         )
         self._arm5_body_id = mujoco.mj_name2id(
             self._model, mujoco.mjtObj.mjOBJ_BODY, "arm_link5",
         )
+
+        self._yellow_qpos_adr = self._model.joint("yellow_joint").qposadr[0]
+        self._red_qpos_adr = self._model.joint("red_joint").qposadr[0]
+
+        rng = np.random.default_rng(seed)
+        y_pos, y_yaw, r_pos, r_yaw = _randomize_block_poses(rng)
+        self._set_block_qpos(self._yellow_qpos_adr, y_pos, y_yaw)
+        self._set_block_qpos(self._red_qpos_adr, r_pos, r_yaw)
+
+        mujoco.mj_forward(self._model, self._data)
+
+        self._base_link_pos = self._data.body("base_link").xpos.copy()
+
+        weld_id = mujoco.mj_name2id(
+            self._model, mujoco.mjtObj.mjOBJ_EQUALITY, "yellow_weld",
+        )
+        self._weld_eq_id = weld_id
+        self._grip_attached = False
+        self._grip_ctrl_idx = self._actuator_ctrl_idx["grip_joint"]
         self._attach_dist = 0.12
         self._detach_ctrl = -0.5
 
@@ -121,8 +172,8 @@ class MuJoCoBridgeNode(Node):
         cb = ReentrantCallbackGroup()
 
         self._joint_state_pub = self.create_publisher(JointState, "/joint_states", 10)
-        self._cube_pose_pub = self.create_publisher(PoseStamped, "/cube_pose", 10)
-        self._target_pose_pub = self.create_publisher(PoseStamped, "/target_place_pose", 10)
+        self._yellow_pose_pub = self.create_publisher(PoseStamped, "/yellow_block_pose", 10)
+        self._red_pose_pub = self.create_publisher(PoseStamped, "/red_block_pose", 10)
         self._image_pub = self.create_publisher(Image, "/front_cam/image_raw", 10)
 
         self.create_subscription(
@@ -140,12 +191,19 @@ class MuJoCoBridgeNode(Node):
         if self._recording:
             self.get_logger().info(f"Video recording enabled -> {record_video}")
 
+        y_base = y_pos - self._base_link_pos
+        r_base = r_pos - self._base_link_pos
         self.get_logger().info(
             f"MuJoCo bridge ready — model={xml_path.name}  "
             f"base_link@world={self._base_link_pos.tolist()}  "
-            f"place_world={self._place_position.tolist()}  "
-            f"place_base={self._place_in_base.tolist()}"
+            f"yellow_base=[{y_base[0]:.3f},{y_base[1]:.3f},{y_base[2]:.3f}] yaw={y_yaw:.2f}  "
+            f"red_base=[{r_base[0]:.3f},{r_base[1]:.3f},{r_base[2]:.3f}] yaw={r_yaw:.2f}"
         )
+
+    def _set_block_qpos(self, qpos_adr: int, pos: np.ndarray, yaw: float) -> None:
+        quat = _yaw_to_quat(yaw)
+        self._data.qpos[qpos_adr:qpos_adr + 3] = pos
+        self._data.qpos[qpos_adr + 3:qpos_adr + 7] = quat
 
     def _on_joint_command(self, msg: JointState) -> None:
         with self._lock:
@@ -210,13 +268,13 @@ class MuJoCoBridgeNode(Node):
     _SIM_SUBSTEPS = 16
 
     def _update_grip_weld(self) -> None:
-        """Magnetic gripper: activate weld when gripper closes near cube."""
+        """Magnetic gripper: activate weld when gripper closes near yellow block."""
         grip_ctrl = self._data.ctrl[self._grip_ctrl_idx]
-        cube_pos = self._data.body(self._cube_body_id).xpos.copy()
-        cube_quat = self._data.body(self._cube_body_id).xquat.copy()
+        block_pos = self._data.body(self._yellow_body_id).xpos.copy()
+        block_quat = self._data.body(self._yellow_body_id).xquat.copy()
         arm5_pos = self._data.body(self._arm5_body_id).xpos.copy()
         arm5_quat = self._data.body(self._arm5_body_id).xquat.copy()
-        dist = np.linalg.norm(cube_pos - arm5_pos)
+        dist = np.linalg.norm(block_pos - arm5_pos)
 
         if not self._grip_attached:
             if grip_ctrl > self._detach_ctrl and dist < self._attach_dist:
@@ -224,11 +282,11 @@ class MuJoCoBridgeNode(Node):
                 mujoco.mju_negQuat(inv_arm5_quat, arm5_quat)
 
                 rel_pos = np.zeros(3)
-                diff = cube_pos - arm5_pos
+                diff = block_pos - arm5_pos
                 mujoco.mju_rotVecQuat(rel_pos, diff, inv_arm5_quat)
 
                 rel_quat = np.zeros(4)
-                mujoco.mju_mulQuat(rel_quat, inv_arm5_quat, cube_quat)
+                mujoco.mju_mulQuat(rel_quat, inv_arm5_quat, block_quat)
 
                 eq_data = self._model.eq_data[self._weld_eq_id]
                 eq_data[0:3] = 0.0
@@ -267,14 +325,30 @@ class MuJoCoBridgeNode(Node):
                 self._renderer.update_scene(self._data, camera=self._camera_name)
                 self._latest_rgb = self._renderer.render().copy()
 
+    def _make_pose_msg(self, stamp, body_id) -> PoseStamped:
+        pos = self._data.body(body_id).xpos.copy()
+        quat = self._data.body(body_id).xquat.copy()
+        base = pos - self._base_link_pos
+        msg = PoseStamped()
+        msg.header.stamp = stamp
+        msg.header.frame_id = "base_link"
+        msg.pose.position.x = float(base[0])
+        msg.pose.position.y = float(base[1])
+        msg.pose.position.z = float(base[2])
+        msg.pose.orientation.w = float(quat[0])
+        msg.pose.orientation.x = float(quat[1])
+        msg.pose.orientation.y = float(quat[2])
+        msg.pose.orientation.z = float(quat[3])
+        return msg
+
     def _publish_state(self) -> None:
         now = self.get_clock().now().to_msg()
 
         with self._lock:
             qpos = self._data.qpos.copy()
             qvel = self._data.qvel.copy()
-            cube_pos = self._data.body("target_cube").xpos.copy()
-            cube_quat = self._data.body("target_cube").xquat.copy()
+            yellow_msg = self._make_pose_msg(now, self._yellow_body_id)
+            red_msg = self._make_pose_msg(now, self._red_body_id)
 
         js_msg = JointState()
         js_msg.header.stamp = now
@@ -283,27 +357,8 @@ class MuJoCoBridgeNode(Node):
         js_msg.velocity = [float(qvel[self._joint_qvel_adr[n]]) for n in ALL_JOINT_NAMES]
         self._joint_state_pub.publish(js_msg)
 
-        cube_base = cube_pos - self._base_link_pos
-        cube_msg = PoseStamped()
-        cube_msg.header.stamp = now
-        cube_msg.header.frame_id = "base_link"
-        cube_msg.pose.position.x = float(cube_base[0])
-        cube_msg.pose.position.y = float(cube_base[1])
-        cube_msg.pose.position.z = float(cube_base[2])
-        cube_msg.pose.orientation.w = float(cube_quat[0])
-        cube_msg.pose.orientation.x = float(cube_quat[1])
-        cube_msg.pose.orientation.y = float(cube_quat[2])
-        cube_msg.pose.orientation.z = float(cube_quat[3])
-        self._cube_pose_pub.publish(cube_msg)
-
-        target_msg = PoseStamped()
-        target_msg.header.stamp = now
-        target_msg.header.frame_id = "base_link"
-        target_msg.pose.position.x = float(self._place_in_base[0])
-        target_msg.pose.position.y = float(self._place_in_base[1])
-        target_msg.pose.position.z = float(self._place_in_base[2])
-        target_msg.pose.orientation.w = 1.0
-        self._target_pose_pub.publish(target_msg)
+        self._yellow_pose_pub.publish(yellow_msg)
+        self._red_pose_pub.publish(red_msg)
 
         rgb = self._latest_rgb
         if rgb is not None:
@@ -331,15 +386,10 @@ def _load_config() -> dict:
 def main() -> None:
     config = _load_config()
     sim_cfg = config["simulation"]
-    ds_cfg = config.get("dataset", {})
 
     parser = argparse.ArgumentParser(description="MuJoCo ROS2 bridge for X3Plus")
     parser.add_argument("--model", default=sim_cfg["model_path"])
     parser.add_argument("--camera", default=sim_cfg.get("camera_name", "front_cam"))
-    parser.add_argument(
-        "--place-pos", nargs=3, type=float,
-        default=ds_cfg.get("place_position", [0.15, -0.15, 0.39]),
-    )
     parser.add_argument(
         "--resolution", nargs=2, type=int,
         default=sim_cfg.get("camera_resolution", [256, 256]),
@@ -348,16 +398,18 @@ def main() -> None:
                         help="Path to save MP4 video on task_complete")
     parser.add_argument("--video-fps", type=int,
                         default=sim_cfg.get("video_fps", 30))
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Random seed for block placement (None = random)")
     args = parser.parse_args()
 
     rclpy.init()
     node = MuJoCoBridgeNode(
         model_path=args.model,
-        place_position=args.place_pos,
         camera_name=args.camera,
         resolution=tuple(args.resolution),
         record_video=args.record_video,
         video_fps=args.video_fps,
+        seed=args.seed,
     )
 
     executor = SingleThreadedExecutor()

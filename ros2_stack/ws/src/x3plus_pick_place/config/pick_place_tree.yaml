@@ -1,0 +1,76 @@
+# Behavior tree configuration for X3Plus two-block pick-and-place.
+#
+# Movement pattern (configured here, not hardcoded):
+#   arm_joint1       → base yaw (horizontal rotation to face block)
+#   arm_joint2/3/4   → sagittal plane (forward-back, up-down)
+#   arm_joint5       → wrist roll (gripper orientation alignment)
+#   grip_joint       → open / close
+
+robot:
+  # Init pose: gripper pointing straight down (q2+q3+q4 ≈ π)
+  init_joints: [0.0, 0.52, 1.05, 1.57, 0.0]
+  gripper_open: -1.54
+  gripper_closed: 0.0
+  gripper_close_threshold: -0.35
+  finger_ee_offset_z: 0.039
+
+blocks:
+  yellow:
+    topic: "/yellow_block_pose"
+    half_height: 0.014
+  red:
+    topic: "/red_block_pose"
+    half_height: 0.014
+
+movement:
+  approach_height: 0.05
+  lift_height: 0.05
+  settle_time: 0.5
+
+tree:
+  - action: wait_for_block_poses
+  - action: open_gripper
+  - action: move_to_init
+
+  # ── Pick yellow block (from top) ──
+  - action: rotate_base_to_block
+    block: yellow
+  - action: move_above_block
+    block: yellow
+    height_offset: approach_height
+  - action: align_wrist_to_block
+    block: yellow
+  - action: move_above_block
+    block: yellow
+    height_offset: 0
+  - action: close_gripper
+  - action: settle
+  - action: lift_block
+    block: yellow
+    height_offset: lift_height
+  - action: verify_grasp
+
+  # ── Place on red block (from top) ──
+  - action: rotate_base_to_block
+    block: red
+  - action: move_above_block
+    block: red
+    height_offset: approach_height
+    stack_on_top: true
+  - action: align_wrist_to_block
+    block: red
+  - action: move_above_block
+    block: red
+    height_offset: 0
+    stack_on_top: true
+  - action: open_gripper
+  - action: settle
+  - action: retreat_above_block
+    block: red
+    height_offset: approach_height
+    stack_on_top: true
+
+  # ── Return ──
+  - action: move_to_init
+  - action: verify_placement
+  - action: signal_complete

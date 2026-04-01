@@ -188,3 +188,135 @@ def solve_ik(
                     best = list(sol)
 
     return best
+
+
+# ── Decomposed motion helpers ────────────────────────────────────────────────
+
+def compute_base_yaw(target_xy: list[float] | np.ndarray) -> float | None:
+    """Compute ``arm_joint1`` angle to face a target XY in the base_link frame.
+
+    Uses the "forward reach" branch (S < 0) which keeps the arm extending
+    away from the base toward the target.  Returns ``None`` if out of range.
+    """
+    dx = float(target_xy[0]) - BASE_X
+    dy = float(target_xy[1])
+    r = math.sqrt(dx * dx + dy * dy)
+    if r < 1e-6:
+        return 0.0
+    q1 = math.atan2(-dy, dx)
+    if J_LO[0] + _MARGIN <= q1 <= J_HI[0] - _MARGIN:
+        return q1
+    q1_back = math.atan2(dy, -dx)
+    if J_LO[0] + _MARGIN <= q1_back <= J_HI[0] - _MARGIN:
+        return q1_back
+    return None
+
+
+def cartesian_to_sagittal(
+    target_xyz: list[float] | np.ndarray,
+    q1: float,
+) -> tuple[float, float]:
+    """Convert a 3D target (base_link frame) to sagittal-plane coordinates.
+
+    Returns ``(S, Z)`` where S is the signed horizontal reach in the arm's
+    sagittal plane and Z is the height above the shoulder.
+    """
+    px, py, pz = float(target_xyz[0]), float(target_xyz[1]), float(target_xyz[2])
+    dx = px - BASE_X
+    dy = py
+    c1, s1 = math.cos(q1), math.sin(q1)
+    S = -dx * c1 + dy * s1
+    Z = pz - SHOULDER_Z
+    return S, Z
+
+
+def solve_planar_ik(
+    S_target: float,
+    Z_target: float,
+    alpha: float | None = None,
+    current_q234: list[float] | None = None,
+) -> list[float] | None:
+    """Solve for joints 2, 3, 4 in the sagittal plane.
+
+    If ``alpha`` is given, enforces q2+q3+q4 = alpha (fixes the wrist pitch
+    direction).  Otherwise sweeps alpha to find the best reachable solution.
+
+    Returns ``[q2, q3, q4]`` or ``None``.
+    """
+    if alpha is not None:
+        alphas = [alpha]
+    else:
+        alphas = np.linspace(-2.5, 3.5, 400).tolist()
+
+    best: list[float] | None = None
+    best_cost = float("inf")
+
+    for a in alphas:
+        sa = math.sin(a)
+        ca = math.cos(a)
+        Rv = S_target - D5 * ca - L3 * sa
+        Hv = Z_target - L3 * ca + D5 * sa
+
+        D_sq = Rv * Rv + Hv * Hv
+        cq3 = (D_sq - _L12_SQ) / _2L1L2
+        if cq3 < -1.0 or cq3 > 1.0:
+            continue
+        sq3_abs = math.sqrt(max(0.0, 1.0 - cq3 * cq3))
+
+        for sign3 in (1.0, -1.0):
+            sq3 = sign3 * sq3_abs
+            q3 = math.atan2(sq3, cq3)
+            if q3 < J_LO[2] + _MARGIN or q3 > J_HI[2] - _MARGIN:
+                continue
+
+            A = L1 + L2 * cq3
+            B = L2 * sq3
+            q2 = _wrap(math.atan2(Rv, Hv) - math.atan2(B, A))
+            if q2 < J_LO[1] + _MARGIN or q2 > J_HI[1] - _MARGIN:
+                continue
+
+            q4 = _wrap(a - q2 - q3)
+            if q4 < J_LO[3] + _MARGIN or q4 > J_HI[3] - _MARGIN:
+                continue
+
+            S_check = L1 * math.sin(q2) + L2 * math.sin(q2 + q3) + D5 * ca + L3 * sa
+            Z_check = L1 * math.cos(q2) + L2 * math.cos(q2 + q3) + L3 * ca - D5 * sa
+            err = math.sqrt((S_check - S_target) ** 2 + (Z_check - Z_target) ** 2)
+            if err > 0.005:
+                continue
+
+            if current_q234 is not None:
+                cost = sum(
+                    (v - float(current_q234[i])) ** 2
+                    for i, v in enumerate([q2, q3, q4])
+                )
+            else:
+                cost = q2 ** 2 + q3 ** 2 + q4 ** 2
+
+            if cost < best_cost:
+                best_cost = cost
+                best = [q2, q3, q4]
+
+    return best
+
+
+def compute_wrist_roll(block_yaw: float, q1: float) -> float:
+    """Compute ``arm_joint5`` to align the gripper with a block's yaw.
+
+    The gripper's "forward" axis in the world XY plane is determined by the
+    base yaw ``q1`` (axis (0,0,-1), so positive q1 rotates the arm to the
+    left).  ``arm_joint5`` (axis (0,0,+1)) adds a roll about the gripper axis.
+    When the gripper points downward, this roll directly maps to the world
+    yaw of the gripped object.  The required joint5 value is::
+
+        q5 = block_yaw + q1
+
+    (because joint1 axis is negative-Z while joint5 axis is positive-Z,
+    and the pi/2 frame rotation between link4 and link5 makes the roll axis
+    project onto world-Z when the arm pitches to vertical).
+
+    The result is clamped to ``arm_joint5`` limits.
+    """
+    q5 = _wrap(block_yaw + q1)
+    q5 = max(J_LO[4] + _MARGIN, min(J_HI[4] - _MARGIN, q5))
+    return q5
