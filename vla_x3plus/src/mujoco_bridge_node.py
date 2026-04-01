@@ -147,6 +147,12 @@ class MuJoCoBridgeNode(Node):
         self._yellow_qpos_adr = self._model.joint("yellow_joint").qposadr[0]
         self._red_qpos_adr = self._model.joint("red_joint").qposadr[0]
 
+        init_key_id = mujoco.mj_name2id(
+            self._model, mujoco.mjtObj.mjOBJ_KEY, "init",
+        )
+        if init_key_id >= 0:
+            mujoco.mj_resetDataKeyframe(self._model, self._data, init_key_id)
+
         rng = np.random.default_rng(seed)
         y_pos, y_yaw, r_pos, r_yaw = _randomize_block_poses(rng)
         self._set_block_qpos(self._yellow_qpos_adr, y_pos, y_yaw)
@@ -162,7 +168,7 @@ class MuJoCoBridgeNode(Node):
         self._weld_eq_id = weld_id
         self._grip_attached = False
         self._grip_ctrl_idx = self._actuator_ctrl_idx["grip_joint"]
-        self._attach_dist = 0.12
+        self._attach_dist = 0.10
         self._detach_ctrl = -0.5
 
         self._lock = threading.Lock()
@@ -265,7 +271,7 @@ class MuJoCoBridgeNode(Node):
         self.get_logger().info(f"Video saved: {path}")
         raise SystemExit(0)
 
-    _SIM_SUBSTEPS = 16
+    _SIM_SUBSTEPS = 20
 
     def _update_grip_weld(self) -> None:
         """Magnetic gripper: activate weld when gripper closes near yellow block."""
@@ -289,7 +295,6 @@ class MuJoCoBridgeNode(Node):
                 mujoco.mju_mulQuat(rel_quat, inv_arm5_quat, block_quat)
 
                 eq_data = self._model.eq_data[self._weld_eq_id]
-                eq_data[0:3] = 0.0
                 eq_data[3:6] = rel_pos
                 eq_data[6:10] = rel_quat
 

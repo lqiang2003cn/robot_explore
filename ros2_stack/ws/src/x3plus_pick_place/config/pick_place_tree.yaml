@@ -12,7 +12,7 @@ robot:
   gripper_open: -1.54
   gripper_closed: 0.0
   gripper_close_threshold: -0.35
-  finger_ee_offset_z: 0.039
+  finger_ee_offset_z: 0.005
 
 blocks:
   yellow:

@@ -12,7 +12,7 @@
 
   <default>
     <joint damping="2.0" armature="0.01"/>
-    <geom condim="4" friction="1 0.5 0.01"/>
+    <geom condim="4" friction="1 0.5 0.01" solref="0.005 1" solimp="0.95 0.99 0.001"/>
     <position kp="200"/>
   </default>
 
@@ -93,11 +93,16 @@
 
     <!-- ====== Table ====== -->
     <body name="table" pos="0 0 0.35">
-      <geom name="table_top" type="box" size="0.3 0.3 0.02" material="mat_table" mass="20"/>
-      <geom name="leg1" type="cylinder" fromto="-0.25 -0.25 -0.35 -0.25 -0.25 -0.02" size="0.02" material="mat_table"/>
-      <geom name="leg2" type="cylinder" fromto=" 0.25 -0.25 -0.35  0.25 -0.25 -0.02" size="0.02" material="mat_table"/>
-      <geom name="leg3" type="cylinder" fromto="-0.25  0.25 -0.35 -0.25  0.25 -0.02" size="0.02" material="mat_table"/>
-      <geom name="leg4" type="cylinder" fromto=" 0.25  0.25 -0.35  0.25  0.25 -0.02" size="0.02" material="mat_table"/>
+      <geom name="table_top" type="box" size="0.3 0.3 0.02" material="mat_table" mass="20"
+            contype="1" conaffinity="1"/>
+      <geom name="leg1" type="cylinder" fromto="-0.25 -0.25 -0.35 -0.25 -0.25 -0.02" size="0.02" material="mat_table"
+            contype="1" conaffinity="1"/>
+      <geom name="leg2" type="cylinder" fromto=" 0.25 -0.25 -0.35  0.25 -0.25 -0.02" size="0.02" material="mat_table"
+            contype="1" conaffinity="1"/>
+      <geom name="leg3" type="cylinder" fromto="-0.25  0.25 -0.35 -0.25  0.25 -0.02" size="0.02" material="mat_table"
+            contype="1" conaffinity="1"/>
+      <geom name="leg4" type="cylinder" fromto=" 0.25  0.25 -0.35  0.25  0.25 -0.02" size="0.02" material="mat_table"
+            contype="1" conaffinity="1"/>
     </body>
 
     <!-- ====== Yellow block (to be picked up) ====== -->
@@ -120,7 +125,7 @@
          STL meshes from urdf/meshes/X3plus/ matching the real hardware.
          Kinematic chain from x3plus.urdf.
     -->
-    <body name="base_link" pos="-0.05 0 0.37">
+    <body name="base_link" pos="-0.05 0 0.451">
       <geom name="base_link_visual" type="mesh" mesh="base_link_visual"
             material="mat_green" contype="0" conaffinity="0"/>
       <geom name="base_link_collision" type="mesh" mesh="base_link_collision"
@@ -148,7 +153,7 @@
         <geom name="arm_link1_visual" type="mesh" mesh="arm_link1_visual"
               material="mat_gray" contype="0" conaffinity="0"/>
         <geom name="arm_link1_collision" type="mesh" mesh="arm_link1_collision"
-              group="3" mass="0.028" contype="0" conaffinity="0"/>
+              group="3" mass="0.028" contype="1" conaffinity="1"/>
 
         <body name="arm_link2" pos="0 0 0.0405" euler="-1.5708 0 0">
           <joint name="arm_joint2" type="hinge" axis="0 0 -1"
@@ -156,7 +161,7 @@
           <geom name="arm_link2_visual" type="mesh" mesh="arm_link2_visual"
                 material="mat_green" contype="0" conaffinity="0"/>
           <geom name="arm_link2_collision" type="mesh" mesh="arm_link2_collision"
-                group="3" mass="0.032" contype="0" conaffinity="0"/>
+                group="3" mass="0.032" contype="1" conaffinity="1"/>
 
           <body name="arm_link3" pos="0 -0.0829 0">
             <joint name="arm_joint3" type="hinge" axis="0 0 -1"
@@ -164,7 +169,7 @@
             <geom name="arm_link3_visual" type="mesh" mesh="arm_link3_visual"
                   material="mat_gray" contype="0" conaffinity="0"/>
             <geom name="arm_link3_collision" type="mesh" mesh="arm_link3_collision"
-                  group="3" mass="0.032" contype="0" conaffinity="0"/>
+                  group="3" mass="0.032" contype="1" conaffinity="1"/>
 
             <body name="arm_link4" pos="0 -0.0829 0">
               <joint name="arm_joint4" type="hinge" axis="0 0 -1"
@@ -172,7 +177,7 @@
               <geom name="arm_link4_visual" type="mesh" mesh="arm_link4_visual"
                     material="mat_green" contype="0" conaffinity="0"/>
               <geom name="arm_link4_collision" type="mesh" mesh="arm_link4_collision"
-                    group="3" mass="0.050" contype="0" conaffinity="0"/>
+                    group="3" mass="0.050" contype="1" conaffinity="1"/>
 
               <!-- Wrist camera -->
               <camera name="wrist_cam" pos="-0.0481 -0.05145 -0.0022"
@@ -192,7 +197,7 @@
                 <geom name="arm_link5_visual" type="mesh" mesh="arm_link5_visual"
                       material="mat_gray" contype="0" conaffinity="0"/>
                 <geom name="arm_link5_collision" type="mesh" mesh="arm_link5_collision"
-                      group="3" mass="0.041" contype="0" conaffinity="0"/>
+                      group="3" mass="0.041" friction="1 0.5 0.01"/>
 
                 <!-- Right finger: rlink1 (actuated) -> rlink2 (mimic) -->
                 <body name="rlink1" pos="-0.0035 -0.012625 -0.0685" euler="0 -1.5708 0">
@@ -201,14 +206,16 @@
                   <geom name="rlink1_visual" type="mesh" mesh="rlink1_visual"
                         material="mat_green" contype="0" conaffinity="0"/>
                   <geom name="rlink1_collision" type="mesh" mesh="rlink1_collision"
-                        group="3" mass="0.00118" contype="0" conaffinity="0"/>
+                        group="3" mass="0.00118" friction="1.5 0.05 0.01"
+                        contype="1" conaffinity="1"/>
 
                   <body name="rlink2" pos="0.03 -0.00075429 0">
                     <joint name="rlink_joint2" type="hinge" axis="0 0 1" damping="0.3"/>
                     <geom name="rlink2_visual" type="mesh" mesh="rlink2_visual"
                           material="mat_green" contype="0" conaffinity="0"/>
                     <geom name="rlink2_collision" type="mesh" mesh="rlink2_collision"
-                          group="3" mass="0.00245" contype="0" conaffinity="0"/>
+                          group="3" mass="0.00245" friction="1.5 0.05 0.01"
+                          contype="1" conaffinity="1"/>
                   </body>
                 </body>
 
@@ -227,14 +234,16 @@
                   <geom name="llink1_visual" type="mesh" mesh="llink1_visual"
                         material="mat_green" contype="0" conaffinity="0"/>
                   <geom name="llink1_collision" type="mesh" mesh="llink1_collision"
-                        group="3" mass="0.00121" contype="0" conaffinity="0"/>
+                        group="3" mass="0.00121" friction="1.5 0.05 0.01"
+                        contype="1" conaffinity="1"/>
 
                   <body name="llink2" pos="0.03 0.00065104 0">
                     <joint name="llink_joint2" type="hinge" axis="0 0 1" damping="0.3"/>
                     <geom name="llink2_visual" type="mesh" mesh="llink2_visual"
                           material="mat_green" contype="0" conaffinity="0"/>
                     <geom name="llink2_collision" type="mesh" mesh="llink2_collision"
-                          group="3" mass="0.00245" contype="0" conaffinity="0"/>
+                          group="3" mass="0.00245" friction="1.5 0.05 0.01"
+                          contype="1" conaffinity="1"/>
                   </body>
                 </body>
 
@@ -255,6 +264,38 @@
     </body>
   </worldbody>
 
+  <contact>
+    <!-- Robot base is bolted to table — suppress interpenetration forces -->
+    <exclude body1="base_link" body2="table"/>
+
+    <!-- Adjacent arm links (parent-child self-collision) -->
+    <exclude body1="base_link" body2="arm_link1"/>
+    <exclude body1="arm_link1" body2="arm_link2"/>
+    <exclude body1="arm_link2" body2="arm_link3"/>
+    <exclude body1="arm_link3" body2="arm_link4"/>
+    <exclude body1="arm_link4" body2="arm_link5"/>
+
+    <!-- Gripper internal linkage (4-bar mechanism) -->
+    <exclude body1="arm_link5" body2="rlink1"/>
+    <exclude body1="arm_link5" body2="rlink2"/>
+    <exclude body1="arm_link5" body2="rlink3"/>
+    <exclude body1="arm_link5" body2="llink1"/>
+    <exclude body1="arm_link5" body2="llink2"/>
+    <exclude body1="arm_link5" body2="llink3"/>
+    <exclude body1="rlink1" body2="rlink3"/>
+    <exclude body1="llink1" body2="llink3"/>
+    <exclude body1="rlink1" body2="llink1"/>
+    <exclude body1="rlink1" body2="llink2"/>
+    <exclude body1="rlink2" body2="llink1"/>
+    <exclude body1="rlink2" body2="llink2"/>
+    <exclude body1="rlink3" body2="llink3"/>
+
+    <!-- Sensors mounted on base/arm — no collision needed between them and parent -->
+    <exclude body1="base_link" body2="camera_link"/>
+    <exclude body1="base_link" body2="laser_link"/>
+    <exclude body1="arm_link4" body2="mono_link"/>
+  </contact>
+
   <!-- Gripper equality constraints (4-bar parallel linkage from URDF mimic joints) -->
   <equality>
     <joint joint1="grip_joint" joint2="llink_joint1" polycoef="0 -1 0 0 0"/>
@@ -267,12 +308,21 @@
           solref="0.005 1" solimp="0.95 0.99 0.001"/>
   </equality>
 
+  <keyframe>
+    <!-- qpos order: yellow_joint(7) red_joint(7) arm1..5 grip rlink2 rlink3 llink1 llink2 llink3 -->
+    <key name="init"
+         qpos="0.12 0.06 0.384 1 0 0 0
+               0.12 -0.06 0.384 1 0 0 0
+               0 0.52 1.05 1.57 0 -1.54 1.54 -1.54 -1.54 1.54 1.54"
+         ctrl="0 0.52 1.05 1.57 0 -1.54"/>
+  </keyframe>
+
   <actuator>
-    <position name="act_joint1" joint="arm_joint1" kp="200" ctrlrange="-1.5708 1.5708"/>
-    <position name="act_joint2" joint="arm_joint2" kp="200" ctrlrange="-1.5708 1.5708"/>
-    <position name="act_joint3" joint="arm_joint3" kp="200" ctrlrange="-1.5708 1.5708"/>
-    <position name="act_joint4" joint="arm_joint4" kp="200" ctrlrange="-1.5708 1.5708"/>
-    <position name="act_joint5" joint="arm_joint5" kp="100" ctrlrange="-1.5708 3.14159"/>
+    <position name="act_joint1" joint="arm_joint1" kp="800" ctrlrange="-1.5708 1.5708"/>
+    <position name="act_joint2" joint="arm_joint2" kp="800" ctrlrange="-1.5708 1.5708"/>
+    <position name="act_joint3" joint="arm_joint3" kp="800" ctrlrange="-1.5708 1.5708"/>
+    <position name="act_joint4" joint="arm_joint4" kp="800" ctrlrange="-1.5708 1.5708"/>
+    <position name="act_joint5" joint="arm_joint5" kp="400" ctrlrange="-1.5708 3.14159"/>
     <position name="act_grip"   joint="grip_joint" kp="500" ctrlrange="-1.54 0"/>
   </actuator>
 </mujoco>

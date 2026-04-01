@@ -94,7 +94,20 @@ echo "==> Launching x3plus_pick_place pick-and-place pipeline ..."
 ros2 launch x3plus_pick_place pick_place.launch.py &
 PP_PID=$!
 
-# ── Wait for both processes ──────────────────────────────────────────────────
-# The bridge exits on its own after saving video (when task_complete fires).
-# The BT node exits after the tree succeeds or fails.
-wait "$BRIDGE_PID" "$PP_PID" 2>/dev/null || true
+# ── Wait for the BT pipeline, then tear everything down ─────────────────────
+# The BT node exits after the tree succeeds or fails.  If the bridge hasn't
+# exited on its own (e.g. task_complete wasn't sent), kill it so the script
+# doesn't hang.
+wait "$PP_PID" 2>/dev/null || true
+PP_PID=""
+
+if [[ -n "$BRIDGE_PID" ]] && kill -0 "$BRIDGE_PID" 2>/dev/null; then
+  echo "==> BT pipeline finished; waiting a moment for bridge to save video ..."
+  sleep 3
+  if kill -0 "$BRIDGE_PID" 2>/dev/null; then
+    echo "==> Bridge still running — sending SIGTERM"
+    kill "$BRIDGE_PID" 2>/dev/null
+  fi
+  wait "$BRIDGE_PID" 2>/dev/null || true
+  BRIDGE_PID=""
+fi

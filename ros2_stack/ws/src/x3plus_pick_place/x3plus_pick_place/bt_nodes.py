@@ -55,7 +55,11 @@ def _compute_ee_z(
     pick_block_half_h: float = 0.0,
     place_block_half_h: float = 0.0,
 ) -> float:
-    """Compute the EE (arm_link5) target Z for a block approach."""
+    """Compute the EE (arm_link5) target Z for a block approach.
+
+    When the arm points down the fingertips sit *above* arm_link5, so
+    arm_link5 must go *below* the block centre by ``finger_offset``.
+    """
     finger_offset = config["robot"]["finger_ee_offset_z"]
     if stack_on_top:
         target_surface_z = block_z + place_block_half_h + pick_block_half_h
@@ -335,27 +339,35 @@ class VerifyGrasp(py_trees.behaviour.Behaviour):
     def __init__(self, name: str = "VerifyGrasp"):
         super().__init__(name)
         self._start_time: float | None = None
+        self._initial_z: float | None = None
 
     def setup(self, **kwargs):
         self.ctx: PickPlaceContext = _bb_ctx(self)
 
     def initialise(self):
         self._start_time = time.time()
+        block = self.ctx.yellow
+        self._initial_z = block.position[2] if block.position is not None else None
 
     def update(self) -> py_trees.common.Status:
         block = self.ctx.yellow
         lift_h = self.ctx.config["movement"]["lift_height"]
-        if block.position is not None:
-            yellow_hh = self.ctx.config["blocks"]["yellow"]["half_height"]
-            min_z = yellow_hh + lift_h * 0.3
-            if block.position[2] >= min_z:
+        if block.position is not None and self._initial_z is not None:
+            lifted = block.position[2] - self._initial_z
+            min_lift = lift_h * 0.3
+            if lifted >= min_lift:
                 self.logger.info(
-                    f"Grasp verified: z={block.position[2]:.4f} >= {min_z:.4f}"
+                    f"Grasp verified: lifted {lifted*1000:.1f}mm >= {min_lift*1000:.1f}mm"
                 )
                 return py_trees.common.Status.SUCCESS
         if time.time() - self._start_time > 2.0:
-            z = f"{block.position[2]:.4f}" if block.position is not None else "N/A"
-            self.logger.error(f"Grasp FAILED: z={z}")
+            if block.position is not None and self._initial_z is not None:
+                lifted = block.position[2] - self._initial_z
+                self.logger.error(
+                    f"Grasp FAILED: lifted {lifted*1000:.1f}mm"
+                )
+            else:
+                self.logger.error("Grasp FAILED: no block pose")
             return py_trees.common.Status.FAILURE
         return py_trees.common.Status.RUNNING
 

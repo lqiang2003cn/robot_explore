@@ -37,10 +37,10 @@ from x3plus_pick_place.bt_nodes import build_tree_from_config
 
 ARM_JOINT_NAMES = [f"arm_joint{i}" for i in range(1, 6)]
 
-MOVE_DURATION = 4.0
+MOVE_DURATION = 2.0
 MOVE_HZ = 25.0
-CONVERGENCE_TOL = 0.02
-CONVERGENCE_TIMEOUT = 8.0
+CONVERGENCE_TOL = 0.05
+CONVERGENCE_TIMEOUT = 10.0
 
 
 def quat_to_yaw(w: float, x: float, y: float, z: float) -> float:
@@ -116,15 +116,15 @@ class PickPlaceContext:
     ) -> bool:
         if joint_names is None:
             joint_names = list(ARM_JOINT_NAMES)
-        t0 = time.time()
-        while time.time() - t0 < timeout:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
             errs = [
                 abs(self._current_joints.get(n, 0.0) - t)
                 for n, t in zip(joint_names, target)
             ]
             if max(errs) < tolerance:
                 return True
-            time.sleep(0.05)
+            time.sleep(0.02)
         for n, t in zip(joint_names, target):
             c = self._current_joints.get(n, 0.0)
             if abs(c - t) > tolerance:
@@ -150,15 +150,17 @@ class PickPlaceContext:
     ) -> None:
         n_steps = max(1, int(duration * MOVE_HZ))
         dt = 1.0 / MOVE_HZ
+        t0 = time.monotonic()
         for step in range(1, n_steps + 1):
             t = step / n_steps
             t_smooth = 3 * t * t - 2 * t * t * t
             interp = start + (goal - start) * t_smooth
             self._send_joint_command(names, interp.tolist())
-            time.sleep(dt)
-        for _ in range(30):
-            self._send_joint_command(names, goal.tolist())
-            time.sleep(0.05)
+            target_time = t0 + step * dt
+            remaining = target_time - time.monotonic()
+            if remaining > 0:
+                time.sleep(remaining)
+        self._send_joint_command(names, goal.tolist())
 
     # ── Decomposed motion primitives ───────────────────────────────────────
 
@@ -185,10 +187,10 @@ class PickPlaceContext:
             ["arm_joint1"],
             np.array([current]),
             np.array([target_yaw]),
-            duration=2.0,
+            duration=1.0,
         )
         if not self.wait_for_joint_convergence(
-            [target_yaw], ["arm_joint1"], timeout=4.0,
+            [target_yaw], ["arm_joint1"],
         ):
             self._logger.error("RotateBase convergence FAILED")
             return False
@@ -219,10 +221,10 @@ class PickPlaceContext:
             ["arm_joint5"],
             np.array([current]),
             np.array([target_angle]),
-            duration=1.5,
+            duration=1.0,
         )
         if not self.wait_for_joint_convergence(
-            [target_angle], ["arm_joint5"], timeout=4.0,
+            [target_angle], ["arm_joint5"],
         ):
             self._logger.error("AlignWrist convergence FAILED")
             return False
