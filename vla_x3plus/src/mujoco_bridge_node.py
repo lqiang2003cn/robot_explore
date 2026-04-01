@@ -267,9 +267,6 @@ class MuJoCoBridgeNode(Node):
         self._red_body_id = mujoco.mj_name2id(
             self._model, mujoco.mjtObj.mjOBJ_BODY, "red_block",
         )
-        self._arm5_body_id = mujoco.mj_name2id(
-            self._model, mujoco.mjtObj.mjOBJ_BODY, "arm_link5",
-        )
 
         self._yellow_qpos_adr = self._model.joint("yellow_joint").qposadr[0]
         self._red_qpos_adr = self._model.joint("red_joint").qposadr[0]
@@ -294,22 +291,10 @@ class MuJoCoBridgeNode(Node):
         self._set_block_qpos(self._yellow_qpos_adr, y_pos, y_yaw)
         self._set_block_qpos(self._red_qpos_adr, r_pos, r_yaw)
 
-        # Start with gripper open so the weld constraint doesn't attach
-        # during the ros2_control startup delay (ctrl must be <= _detach_ctrl
-        # for the weld to stay off).
         _GRIPPER_OPEN_CTRL = -1.54
         self._data.ctrl[self._actuator_ctrl_idx["grip_joint"]] = _GRIPPER_OPEN_CTRL
 
         mujoco.mj_forward(self._model, self._data)
-
-        weld_id = mujoco.mj_name2id(
-            self._model, mujoco.mjtObj.mjOBJ_EQUALITY, "yellow_weld",
-        )
-        self._weld_eq_id = weld_id
-        self._grip_attached = False
-        self._grip_ctrl_idx = self._actuator_ctrl_idx["grip_joint"]
-        self._attach_dist = 0.05
-        self._detach_ctrl = -0.5
 
         self._lock = threading.Lock()
         self._latest_rgb: np.ndarray | None = None
@@ -416,48 +401,8 @@ class MuJoCoBridgeNode(Node):
 
     _SIM_SUBSTEPS = 20
 
-    def _update_grip_weld(self) -> None:
-        """Magnetic gripper: activate weld when gripper closes near yellow block."""
-        grip_ctrl = self._data.ctrl[self._grip_ctrl_idx]
-        block_pos = self._data.body(self._yellow_body_id).xpos.copy()
-        block_quat = self._data.body(self._yellow_body_id).xquat.copy()
-        arm5_pos = self._data.body(self._arm5_body_id).xpos.copy()
-        arm5_quat = self._data.body(self._arm5_body_id).xquat.copy()
-        dist = np.linalg.norm(block_pos - arm5_pos)
-
-        if not self._grip_attached:
-            if grip_ctrl > self._detach_ctrl and dist < self._attach_dist:
-                inv_arm5_quat = np.zeros(4)
-                mujoco.mju_negQuat(inv_arm5_quat, arm5_quat)
-
-                rel_pos = np.zeros(3)
-                diff = block_pos - arm5_pos
-                mujoco.mju_rotVecQuat(rel_pos, diff, inv_arm5_quat)
-
-                rel_quat = np.zeros(4)
-                mujoco.mju_mulQuat(rel_quat, inv_arm5_quat, block_quat)
-
-                eq_data = self._model.eq_data[self._weld_eq_id]
-                eq_data[3:6] = rel_pos
-                eq_data[6:10] = rel_quat
-
-                self._data.eq_active[self._weld_eq_id] = 1
-                self._grip_attached = True
-                self.get_logger().info(
-                    f"Grip ATTACHED (dist={dist:.3f}m, ctrl={grip_ctrl:.2f}, "
-                    f"rel_pos=[{rel_pos[0]:.3f},{rel_pos[1]:.3f},{rel_pos[2]:.3f}])"
-                )
-        else:
-            if grip_ctrl <= self._detach_ctrl:
-                self._data.eq_active[self._weld_eq_id] = 0
-                self._grip_attached = False
-                self.get_logger().info(
-                    f"Grip RELEASED (ctrl={grip_ctrl:.2f})"
-                )
-
     def _step_sim(self) -> None:
         with self._lock:
-            self._update_grip_weld()
             for _ in range(self._SIM_SUBSTEPS):
                 mujoco.mj_step(self._model, self._data)
             if self._recording and not self._video_saved:

@@ -1,3 +1,8 @@
 ./vla_x3plus/run_pick_place.sh    
 
 vla_x3plus/output/bt_pick_place.mp4
+
+# is this also true in isaac sim?
+Adding primitive finger-pad contact geoms to the fingertips (STL mesh-mesh contacts are too unreliable for grasping in MuJoCo)
+Increasing friction and grip force so the fingers physically squeeze and hold the block
+Adjusting the gripper-close threshold since the fingers now stop at the block rather than passing through it

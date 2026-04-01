@@ -154,7 +154,7 @@ class CloseGripper(py_trees.behaviour.Behaviour):
                 f"Gripper CLOSED OK: {actual:.3f} >= {threshold:.3f}"
             )
             return py_trees.common.Status.SUCCESS
-        if time.time() - self._start_time > 8.0:
+        if time.time() - self._start_time > 15.0:
             self.logger.error(f"Gripper CLOSE TIMEOUT: {actual:.3f}")
             return py_trees.common.Status.FAILURE
         return py_trees.common.Status.RUNNING

@@ -1,6 +1,8 @@
 <mujoco model="x3plus_pick_and_place">
   <compiler angle="radian" meshdir="../urdf/meshes"/>
-  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"
+          cone="elliptic" iterations="200" tolerance="1e-10"/>
+  <size nconmax="200" njmax="600"/>
 
   <visual>
     <quality shadowsize="4096" offsamples="8"/>
@@ -94,7 +96,7 @@
     <!-- ====== Table ====== -->
     <body name="table" pos="0 0 0.35">
       <geom name="table_top" type="box" size="0.3 0.3 0.02" material="mat_table" mass="20"
-            contype="1" conaffinity="1"/>
+            contype="1" conaffinity="1" friction="3 0.5 0.01"/>
       <geom name="leg1" type="cylinder" fromto="-0.25 -0.25 -0.35 -0.25 -0.25 -0.02" size="0.02" material="mat_table"
             contype="1" conaffinity="1"/>
       <geom name="leg2" type="cylinder" fromto=" 0.25 -0.25 -0.35  0.25 -0.25 -0.02" size="0.02" material="mat_table"
@@ -109,15 +111,15 @@
     <body name="yellow_block" pos="0.12 0.06 0.384">
       <freejoint name="yellow_joint"/>
       <geom name="yellow_geom" type="box" size="0.012 0.012 0.014" mass="0.02"
-            material="mat_yellow" friction="1.5 0.05 0.01"
-            solref="0.01 1" solimp="0.95 0.99 0.001"/>
+            material="mat_yellow" friction="5 0.5 0.01" condim="6"
+            solref="0.005 1" solimp="0.95 0.99 0.001"/>
     </body>
 
     <!-- ====== Red block (place target) ====== -->
     <body name="red_block" pos="0.12 -0.06 0.384">
       <freejoint name="red_joint"/>
       <geom name="red_geom" type="box" size="0.012 0.012 0.014" mass="0.02"
-            material="mat_red" friction="1.5 0.05 0.01"
+            material="mat_red" friction="3 0.1 0.01" condim="4"
             solref="0.01 1" solimp="0.95 0.99 0.001"/>
     </body>
 
@@ -202,20 +204,24 @@
                 <!-- Right finger: rlink1 (actuated) -> rlink2 (mimic) -->
                 <body name="rlink1" pos="-0.0035 -0.012625 -0.0685" euler="0 -1.5708 0">
                   <joint name="grip_joint" type="hinge" axis="0 0 1"
-                         range="-1.54 0" damping="0.3"/>
+                         range="-1.54 0" damping="5.0"/>
                   <geom name="rlink1_visual" type="mesh" mesh="rlink1_visual"
                         material="mat_green" contype="0" conaffinity="0"/>
                   <geom name="rlink1_collision" type="mesh" mesh="rlink1_collision"
-                        group="3" mass="0.00118" friction="1.5 0.05 0.01"
-                        contype="1" conaffinity="1"/>
+                        group="3" mass="0.00118" friction="3 0.1 0.01"
+                        contype="1" conaffinity="1" condim="4"/>
 
                   <body name="rlink2" pos="0.03 -0.00075429 0">
                     <joint name="rlink_joint2" type="hinge" axis="0 0 1" damping="0.3"/>
                     <geom name="rlink2_visual" type="mesh" mesh="rlink2_visual"
                           material="mat_green" contype="0" conaffinity="0"/>
                     <geom name="rlink2_collision" type="mesh" mesh="rlink2_collision"
-                          group="3" mass="0.00245" friction="1.5 0.05 0.01"
-                          contype="1" conaffinity="1"/>
+                          group="3" mass="0.00245" friction="3 0.1 0.01"
+                          contype="1" conaffinity="1" condim="4"/>
+                    <geom name="rlink2_pad" type="box" pos="0.030 0.012 0"
+                          size="0.010 0.003 0.006" friction="5 0.5 0.01"
+                          contype="1" conaffinity="1" condim="6"
+                          rgba="0.18 0.62 0.22 1" group="0"/>
                   </body>
                 </body>
 
@@ -234,16 +240,20 @@
                   <geom name="llink1_visual" type="mesh" mesh="llink1_visual"
                         material="mat_green" contype="0" conaffinity="0"/>
                   <geom name="llink1_collision" type="mesh" mesh="llink1_collision"
-                        group="3" mass="0.00121" friction="1.5 0.05 0.01"
-                        contype="1" conaffinity="1"/>
+                        group="3" mass="0.00121" friction="3 0.1 0.01"
+                        contype="1" conaffinity="1" condim="4"/>
 
                   <body name="llink2" pos="0.03 0.00065104 0">
                     <joint name="llink_joint2" type="hinge" axis="0 0 1" damping="0.3"/>
                     <geom name="llink2_visual" type="mesh" mesh="llink2_visual"
                           material="mat_green" contype="0" conaffinity="0"/>
                     <geom name="llink2_collision" type="mesh" mesh="llink2_collision"
-                          group="3" mass="0.00245" friction="1.5 0.05 0.01"
-                          contype="1" conaffinity="1"/>
+                          group="3" mass="0.00245" friction="3 0.1 0.01"
+                          contype="1" conaffinity="1" condim="4"/>
+                    <geom name="llink2_pad" type="box" pos="0.030 -0.012 0"
+                          size="0.010 0.003 0.006" friction="5 0.1 0.01"
+                          contype="1" conaffinity="1" condim="4"
+                          rgba="0.18 0.62 0.22 1" group="0"/>
                   </body>
                 </body>
 
@@ -303,9 +313,6 @@
     <joint joint1="grip_joint" joint2="rlink_joint3" polycoef="0 1 0 0 0"/>
     <joint joint1="grip_joint" joint2="llink_joint2" polycoef="0 1 0 0 0"/>
     <joint joint1="grip_joint" joint2="llink_joint3" polycoef="0 -1 0 0 0"/>
-    <!-- Magnetic gripper weld for yellow block (picked up) -->
-    <weld name="yellow_weld" body1="arm_link5" body2="yellow_block" active="false"
-          solref="0.005 1" solimp="0.95 0.99 0.001"/>
   </equality>
 
   <keyframe>
@@ -323,6 +330,7 @@
     <position name="act_joint3" joint="arm_joint3" kp="800" ctrlrange="-1.5708 1.5708"/>
     <position name="act_joint4" joint="arm_joint4" kp="800" ctrlrange="-1.5708 1.5708"/>
     <position name="act_joint5" joint="arm_joint5" kp="400" ctrlrange="-1.5708 3.14159"/>
-    <position name="act_grip"   joint="grip_joint" kp="500" ctrlrange="-1.54 0"/>
+    <position name="act_grip"   joint="grip_joint" kp="50" ctrlrange="-1.54 0"
+              forcerange="-5 5"/>
   </actuator>
 </mujoco>

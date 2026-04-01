@@ -11,7 +11,7 @@ robot:
   init_joints: [0.0, 0.0, 0.0, 0.0, 0.0]
   gripper_open: -1.54
   gripper_closed: 0.0
-  gripper_close_threshold: -0.35
+  gripper_close_threshold: -1.2
   finger_ee_offset_z: 0.005
 
 blocks:
@@ -25,7 +25,7 @@ blocks:
 movement:
   approach_height: 0.05
   lift_height: 0.05
-  settle_time: 0.5
+  settle_time: 1.0
 
 tree:
   - action: wait_for_block_poses

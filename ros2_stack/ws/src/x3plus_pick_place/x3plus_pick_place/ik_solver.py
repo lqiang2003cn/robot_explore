@@ -443,7 +443,7 @@ def compute_place_wrist_roll(
     world yaw at place time is ``-q1 + q5``, and the block yaw equals
     ``-q1 + q5 + (yellow_yaw - (-q1_pick + q5_pick))``.
 
-    Since the weld constraint locks the block rigidly to arm_link5 at grasp
+    Since friction locks the block rigidly to the gripper fingers at grasp
     time, the block's world yaw simply equals ``-q1 + q5 + offset`` where
     ``offset = yellow_yaw - (-q1_pick + q5_pick)``.  But we don't track
     q1_pick/q5_pick here.  Instead, we note that after grasping, the block
