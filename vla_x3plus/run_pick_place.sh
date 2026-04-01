@@ -73,6 +73,7 @@ if $RECORD_VIDEO; then
   mkdir -p "$(dirname "$VIDEO_PATH")"
   BRIDGE_ARGS+=(--record-video "$VIDEO_PATH")
 fi
+BRIDGE_ARGS+=(--orth-workspace-only)
 
 echo "==> Starting MuJoCo bridge node ..."
 (cd "$SCRIPT_DIR" && python -m src.mujoco_bridge_node "${BRIDGE_ARGS[@]}") &
@@ -102,10 +103,20 @@ wait "$PP_PID" 2>/dev/null || true
 PP_PID=""
 
 if [[ -n "$BRIDGE_PID" ]] && kill -0 "$BRIDGE_PID" 2>/dev/null; then
-  echo "==> BT pipeline finished; waiting a moment for bridge to save video ..."
-  sleep 3
+  BRIDGE_WAIT_SECS=3
+  BRIDGE_WAIT_REASON="bridge to exit cleanly"
+  if $RECORD_VIDEO; then
+    BRIDGE_WAIT_SECS=15
+  fi
+  echo "==> BT pipeline finished; waiting up to ${BRIDGE_WAIT_SECS}s for $BRIDGE_WAIT_REASON ..."
+  for ((i=0; i<BRIDGE_WAIT_SECS*2; ++i)); do
+    if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
+      break
+    fi
+    sleep 0.5
+  done
   if kill -0 "$BRIDGE_PID" 2>/dev/null; then
-    echo "==> Bridge still running — sending SIGTERM"
+    echo "==> Bridge did not exit after ${BRIDGE_WAIT_SECS}s — sending SIGTERM"
     kill "$BRIDGE_PID" 2>/dev/null
   fi
   wait "$BRIDGE_PID" 2>/dev/null || true

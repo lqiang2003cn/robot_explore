@@ -1,4 +1,4 @@
-"""ROS2 node that orchestrates X3Plus pick-and-place via decomposed motion.
+"""ROS2 node that orchestrates X3Plus pick-and-place via MoveIt execution.
 
 Motion is decomposed into three kinematic groups driven by a YAML-configured
 behavior tree:
@@ -8,9 +8,9 @@ behavior tree:
   - arm_joint5          → wrist roll (orientation alignment)
   - grip_joint          → finger open / close
 
-Position goals are solved with constrained analytical IK.  Joints are driven
-by publishing to /joint_command; the MuJoCo bridge's position actuators
-handle the dynamics.
+Position goals are still solved with constrained analytical IK, but arm
+motions are executed through MoveIt2 + ros2_control so the simulator receives
+time-parameterized joint trajectories instead of coarse direct setpoints.
 """
 
 from __future__ import annotations
@@ -23,10 +23,18 @@ from typing import Any
 import numpy as np
 import yaml
 import rclpy
+from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from geometry_msgs.msg import PoseStamped
+from moveit_msgs.action import MoveGroup
+from moveit_msgs.msg import (
+    Constraints,
+    JointConstraint,
+    MotionPlanRequest,
+    PlanningOptions,
+)
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, Float64MultiArray
 from ament_index_python.packages import get_package_share_directory
@@ -37,10 +45,13 @@ from x3plus_pick_place.bt_nodes import build_tree_from_config
 
 ARM_JOINT_NAMES = [f"arm_joint{i}" for i in range(1, 6)]
 
-MOVE_DURATION = 2.0
-MOVE_HZ = 25.0
 CONVERGENCE_TOL = 0.05
-CONVERGENCE_TIMEOUT = 10.0
+CONVERGENCE_TIMEOUT = 20.0
+MOVEIT_ALLOWED_PLANNING_TIME = 5.0
+MOVEIT_NUM_PLANNING_ATTEMPTS = 10
+MOVEIT_VEL_SCALE = 0.2
+MOVEIT_ACC_SCALE = 0.2
+DIRECT_CMD_PERIOD = 0.05
 
 
 def quat_to_yaw(w: float, x: float, y: float, z: float) -> float:
@@ -53,12 +64,16 @@ def quat_to_yaw(w: float, x: float, y: float, z: float) -> float:
 class BlockState:
     """Tracked state for a single block (position + orientation)."""
 
+    _MIN_VALID_Z = -0.15
+
     def __init__(self) -> None:
         self.position: np.ndarray | None = None
         self.yaw: float | None = None
 
     def update(self, msg: PoseStamped) -> None:
         p = msg.pose.position
+        if p.z < self._MIN_VALID_Z:
+            return
         o = msg.pose.orientation
         self.position = np.array([p.x, p.y, p.z])
         self.yaw = quat_to_yaw(o.w, o.x, o.y, o.z)
@@ -76,6 +91,7 @@ class PickPlaceContext:
         self._logger = node.get_logger()
         self.config = config
 
+        self._move_group_client = ActionClient(node, MoveGroup, "move_action")
         self._joint_cmd_pub = node.create_publisher(
             JointState, "/joint_command", 10,
         )
@@ -86,6 +102,7 @@ class PickPlaceContext:
 
         self.yellow = BlockState()
         self.red = BlockState()
+        self.yellow_rest_pos: np.ndarray | None = None
         self._current_joints: dict[str, float] = {}
 
     def get_block(self, name: str) -> BlockState:
@@ -106,6 +123,43 @@ class PickPlaceContext:
 
     def get_gripper_position(self) -> float:
         return self._current_joints.get("grip_joint", 0.0)
+
+    def have_arm_state(self) -> bool:
+        return all(name in self._current_joints for name in [*ARM_JOINT_NAMES, "grip_joint"])
+
+    def _send_move_group_goal(self, goal_msg: MoveGroup.Goal) -> bool:
+        """Send a MoveGroup goal and wait for the execution result."""
+        if not self._move_group_client.wait_for_server(timeout_sec=10.0):
+            self._logger.error("MoveGroup action server not available")
+            return False
+
+        result_event = threading.Event()
+        result_holder = [False]
+
+        def result_cb(future):
+            result = future.result()
+            if result and result.result.error_code.val == 1:
+                result_holder[0] = True
+            else:
+                error_val = result.result.error_code.val if result else "timeout"
+                self._logger.error(f"MoveGroup failed with error code: {error_val}")
+            result_event.set()
+
+        def goal_response_cb(future):
+            goal_handle = future.result()
+            if not goal_handle.accepted:
+                self._logger.error("MoveGroup goal rejected")
+                result_event.set()
+                return
+            goal_handle.get_result_async().add_done_callback(result_cb)
+
+        send_future = self._move_group_client.send_goal_async(goal_msg)
+        send_future.add_done_callback(goal_response_cb)
+
+        if not result_event.wait(timeout=90.0):
+            self._logger.error("Timed out waiting for MoveGroup result")
+            return False
+        return result_holder[0]
 
     def wait_for_joint_convergence(
         self,
@@ -141,95 +195,85 @@ class PickPlaceContext:
         cmd.position = [float(p) for p in positions]
         self._joint_cmd_pub.publish(cmd)
 
-    def _interpolate_joints(
-        self,
-        names: list[str],
-        start: np.ndarray,
-        goal: np.ndarray,
-        duration: float = MOVE_DURATION,
-    ) -> None:
-        n_steps = max(1, int(duration * MOVE_HZ))
-        dt = 1.0 / MOVE_HZ
-        t0 = time.monotonic()
-        for step in range(1, n_steps + 1):
-            t = step / n_steps
-            t_smooth = 3 * t * t - 2 * t * t * t
-            interp = start + (goal - start) * t_smooth
-            self._send_joint_command(names, interp.tolist())
-            target_time = t0 + step * dt
-            remaining = target_time - time.monotonic()
-            if remaining > 0:
-                time.sleep(remaining)
-        self._send_joint_command(names, goal.tolist())
+    def _execute_direct_arm_goal(self, goal: list[float], label: str) -> bool:
+        self._logger.warn(f"{label}: falling back to direct joint command")
+        deadline = time.monotonic() + CONVERGENCE_TIMEOUT
+        while time.monotonic() < deadline:
+            self._send_joint_command(ARM_JOINT_NAMES, goal)
+            if self.wait_for_joint_convergence(
+                goal,
+                timeout=DIRECT_CMD_PERIOD + 0.1,
+            ):
+                self._logger.info(f"{label} OK (direct)")
+                return True
+            time.sleep(DIRECT_CMD_PERIOD)
+        self._logger.error(f"{label} convergence FAILED (direct)")
+        return False
+
+    def _execute_arm_goal(self, goal: list[float], label: str) -> bool:
+        if self.wait_for_joint_convergence(goal, timeout=0.2):
+            self._logger.info(f"{label} already at goal")
+            return True
+
+        goal_msg = MoveGroup.Goal()
+        goal_msg.request = MotionPlanRequest()
+        goal_msg.request.group_name = "x3plus_arm"
+        goal_msg.request.num_planning_attempts = MOVEIT_NUM_PLANNING_ATTEMPTS
+        goal_msg.request.allowed_planning_time = MOVEIT_ALLOWED_PLANNING_TIME
+        goal_msg.request.max_velocity_scaling_factor = MOVEIT_VEL_SCALE
+        goal_msg.request.max_acceleration_scaling_factor = MOVEIT_ACC_SCALE
+
+        constraints = Constraints()
+        for name, pos in zip(ARM_JOINT_NAMES, goal):
+            jc = JointConstraint()
+            jc.joint_name = name
+            jc.position = float(pos)
+            jc.tolerance_above = 0.01
+            jc.tolerance_below = 0.01
+            jc.weight = 1.0
+            constraints.joint_constraints.append(jc)
+        goal_msg.request.goal_constraints.append(constraints)
+
+        goal_msg.planning_options = PlanningOptions()
+        goal_msg.planning_options.plan_only = False
+        goal_msg.planning_options.replan = True
+        goal_msg.planning_options.replan_attempts = 3
+
+        self._logger.info(
+            f"{label}: {[f'{c:.3f}' for c in self.get_arm_joints()]} → "
+            f"{[f'{g:.3f}' for g in goal]}"
+        )
+        if not self._send_move_group_goal(goal_msg):
+            return self._execute_direct_arm_goal(goal, label)
+        if not self.wait_for_joint_convergence(goal):
+            self._logger.warn(f"{label} convergence FAILED after MoveIt execution")
+            return self._execute_direct_arm_goal(goal, label)
+        self._logger.info(f"{label} OK")
+        return True
 
     # ── Decomposed motion primitives ───────────────────────────────────────
 
     def move_to_joints(self, joint_positions: list[float]) -> bool:
         """Move all 5 arm joints to target positions."""
-        current = np.array(self.get_arm_joints())
-        goal = np.array(joint_positions)
-        self._logger.info(
-            f"MoveAll: {[f'{c:.3f}' for c in current]} → "
-            f"{[f'{g:.3f}' for g in joint_positions]}"
-        )
-        self._interpolate_joints(list(ARM_JOINT_NAMES), current, goal)
-        if not self.wait_for_joint_convergence(joint_positions):
-            self._logger.error("Joint convergence FAILED (move_to_joints)")
-            return False
-        self._logger.info("Joint convergence verified (move_to_joints)")
-        return True
+        return self._execute_arm_goal(joint_positions, "MoveAll")
 
     def rotate_base(self, target_yaw: float) -> bool:
         """Rotate only arm_joint1 to face a direction."""
-        current = self._current_joints.get("arm_joint1", 0.0)
-        self._logger.info(f"RotateBase: {current:.3f} → {target_yaw:.3f}")
-        self._interpolate_joints(
-            ["arm_joint1"],
-            np.array([current]),
-            np.array([target_yaw]),
-            duration=1.0,
-        )
-        if not self.wait_for_joint_convergence(
-            [target_yaw], ["arm_joint1"],
-        ):
-            self._logger.error("RotateBase convergence FAILED")
-            return False
-        self._logger.info("RotateBase OK")
-        return True
+        goal = self.get_arm_joints()
+        goal[0] = target_yaw
+        return self._execute_arm_goal(goal, "RotateBase")
 
     def move_in_plane(self, q234: list[float]) -> bool:
         """Move joints 2, 3, 4 in the sagittal plane."""
-        names = ["arm_joint2", "arm_joint3", "arm_joint4"]
-        current = np.array([self._current_joints.get(n, 0.0) for n in names])
-        goal = np.array(q234)
-        self._logger.info(
-            f"MoveInPlane: {[f'{c:.3f}' for c in current]} → "
-            f"{[f'{g:.3f}' for g in q234]}"
-        )
-        self._interpolate_joints(names, current, goal)
-        if not self.wait_for_joint_convergence(q234, names):
-            self._logger.error("MoveInPlane convergence FAILED")
-            return False
-        self._logger.info("MoveInPlane OK")
-        return True
+        goal = self.get_arm_joints()
+        goal[1:4] = q234
+        return self._execute_arm_goal(goal, "MoveInPlane")
 
     def align_wrist(self, target_angle: float) -> bool:
         """Rotate arm_joint5 to align gripper with block orientation."""
-        current = self._current_joints.get("arm_joint5", 0.0)
-        self._logger.info(f"AlignWrist: {current:.3f} → {target_angle:.3f}")
-        self._interpolate_joints(
-            ["arm_joint5"],
-            np.array([current]),
-            np.array([target_angle]),
-            duration=1.0,
-        )
-        if not self.wait_for_joint_convergence(
-            [target_angle], ["arm_joint5"],
-        ):
-            self._logger.error("AlignWrist convergence FAILED")
-            return False
-        self._logger.info("AlignWrist OK")
-        return True
+        goal = self.get_arm_joints()
+        goal[4] = target_angle
+        return self._execute_arm_goal(goal, "AlignWrist")
 
     def set_gripper(self, position: float) -> None:
         msg = Float64MultiArray()
@@ -289,8 +333,10 @@ def main():
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
 
-    logger.info("Waiting for block poses from simulator ...")
-    while rclpy.ok() and not (ctx.yellow.received and ctx.red.received):
+    logger.info("Waiting for block poses and joint states from simulator ...")
+    while rclpy.ok() and not (
+        ctx.yellow.received and ctx.red.received and ctx.have_arm_state()
+    ):
         time.sleep(0.1)
 
     if not rclpy.ok():

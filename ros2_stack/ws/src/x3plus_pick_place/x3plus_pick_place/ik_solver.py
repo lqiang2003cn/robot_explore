@@ -56,6 +56,7 @@ _L12_SQ = L1 * L1 + L2 * L2
 _2L1L2 = 2.0 * L1 * L2
 _PI = math.pi
 _2PI = 2.0 * _PI
+ORTH_WORKSPACE_ALPHA = _PI
 
 
 def forward_kinematics(q: np.ndarray | list[float]) -> np.ndarray:
@@ -230,6 +231,9 @@ def cartesian_to_sagittal(
     return S, Z
 
 
+_MAX_JOINT_DELTA = 2.0
+
+
 def solve_planar_ik(
     S_target: float,
     Z_target: float,
@@ -244,12 +248,24 @@ def solve_planar_ik(
     Returns ``[q2, q3, q4]`` or ``None``.
     """
     if alpha is not None:
-        alphas = [alpha]
+        alphas = np.array([alpha])
     else:
-        alphas = np.linspace(-2.5, 3.5, 400).tolist()
+        base = np.linspace(-3.5, 4.5, 600)
+        if current_q234 is not None:
+            cur_alpha = float(sum(current_q234))
+            extras = []
+            for shift in (0.0, -_2PI, _2PI):
+                center = cur_alpha + shift
+                if -5.0 <= center <= 6.0:
+                    extras.append(np.linspace(center - 0.5, center + 0.5, 100))
+            alphas = np.concatenate([base] + extras) if extras else base
+        else:
+            alphas = base
 
     best: list[float] | None = None
     best_cost = float("inf")
+    fallback: list[float] | None = None
+    fallback_cost = float("inf")
 
     for a in alphas:
         sa = math.sin(a)
@@ -290,6 +306,16 @@ def solve_planar_ik(
                     (v - float(current_q234[i])) ** 2
                     for i, v in enumerate([q2, q3, q4])
                 )
+                max_delta = max(
+                    abs(q2 - float(current_q234[0])),
+                    abs(q3 - float(current_q234[1])),
+                    abs(q4 - float(current_q234[2])),
+                )
+                if max_delta > _MAX_JOINT_DELTA:
+                    if cost < fallback_cost:
+                        fallback_cost = cost
+                        fallback = [q2, q3, q4]
+                    continue
             else:
                 cost = q2 ** 2 + q3 ** 2 + q4 ** 2
 
@@ -297,26 +323,147 @@ def solve_planar_ik(
                 best_cost = cost
                 best = [q2, q3, q4]
 
+    return best if best is not None else fallback
+
+
+def solve_orthogonal_planar_ik(
+    S_target: float,
+    Z_target: float,
+    current_q234: list[float] | None = None,
+) -> list[float] | None:
+    """Solve planar IK while keeping the gripper orthogonal to the floor."""
+    return solve_planar_ik(
+        S_target,
+        Z_target,
+        alpha=ORTH_WORKSPACE_ALPHA,
+        current_q234=current_q234,
+    )
+
+
+def solve_orthogonal_ik(
+    target: np.ndarray | list[float],
+    q5: float = 0.0,
+    current: np.ndarray | list[float] | None = None,
+    pos_tol: float = 0.003,
+) -> list[float] | None:
+    """Solve IK inside ``orth_workspace`` (fixed downward gripper pitch)."""
+    q1 = compute_base_yaw(target[:2])
+    if q1 is None:
+        return None
+
+    current_q234 = None if current is None else list(current[1:4])
+    S_target, Z_target = cartesian_to_sagittal(target, q1)
+    q234 = solve_orthogonal_planar_ik(
+        S_target,
+        Z_target,
+        current_q234=current_q234,
+    )
+    if q234 is None:
+        return None
+
+    sol = [q1, *q234, q5]
+    fk = forward_kinematics(sol)
+    err = math.sqrt(sum((float(fk[i]) - float(target[i])) ** 2 for i in range(3)))
+    if err > pos_tol:
+        return None
+    return sol
+
+
+def is_in_orth_workspace(
+    target: np.ndarray | list[float],
+    current_q234: list[float] | None = None,
+) -> bool:
+    """Return ``True`` if a Cartesian target is reachable in ``orth_workspace``."""
+    return solve_orthogonal_ik(
+        target,
+        current=None if current_q234 is None else [0.0, *current_q234, 0.0],
+    ) is not None
+
+
+def _best_90deg_candidate(
+    base_angle: float,
+    candidates: list[float],
+) -> float:
+    """Return the candidate closest to *base_angle* (angular distance)."""
+    best = candidates[0]
+    best_d = abs(_wrap(candidates[0] - base_angle))
+    for c in candidates[1:]:
+        d = abs(_wrap(c - base_angle))
+        if d < best_d:
+            best_d = d
+            best = c
     return best
 
 
 def compute_wrist_roll(block_yaw: float, q1: float) -> float:
-    """Compute ``arm_joint5`` to align the gripper with a block's yaw.
+    """Compute ``arm_joint5`` so the gripper's inner faces are parallel to the
+    block's vertical faces (for grasping).
 
-    The gripper's "forward" axis in the world XY plane is determined by the
-    base yaw ``q1`` (axis (0,0,-1), so positive q1 rotates the arm to the
-    left).  ``arm_joint5`` (axis (0,0,+1)) adds a roll about the gripper axis.
-    When the gripper points downward, this roll directly maps to the world
-    yaw of the gripped object.  The required joint5 value is::
+    The gripper's pinch axis (line connecting the two finger pads) lies along
+    arm_link5's local Y.  When the arm points straight down the world-frame
+    yaw of the pinch axis is ``-q1 + q5`` (joint1 axis is ``(0,0,-1)``,
+    joint5 axis is ``(0,0,+1)``).
 
-        q5 = block_yaw + q1
-
-    (because joint1 axis is negative-Z while joint5 axis is positive-Z,
-    and the pi/2 frame rotation between link4 and link5 makes the roll axis
-    project onto world-Z when the arm pitches to vertical).
+    For the gripper's inner faces to be parallel to the block's vertical
+    faces, the pinch axis must be **aligned** with one of the block's
+    horizontal axes.  Because the block has a square cross-section (12 × 12
+    mm) there are four equivalent orientations separated by 90°.  We pick the
+    one that requires the least joint5 motion (closest to 0).
 
     The result is clamped to ``arm_joint5`` limits.
     """
-    q5 = _wrap(block_yaw + q1)
+    candidates = [_wrap(block_yaw + q1 + k * _PI / 2) for k in range(4)]
+    valid = [c for c in candidates
+             if J_LO[4] + _MARGIN <= c <= J_HI[4] - _MARGIN]
+    if not valid:
+        valid = candidates
+    q5 = _best_90deg_candidate(0.0, valid)
+    q5 = max(J_LO[4] + _MARGIN, min(J_HI[4] - _MARGIN, q5))
+    return q5
+
+
+def compute_place_wrist_roll(
+    yellow_yaw: float,
+    red_yaw: float,
+    q1: float,
+    current_q5: float,
+) -> float:
+    """Compute ``arm_joint5`` for placing so the yellow block's local frame
+    aligns with the red block's local frame.
+
+    While the yellow block is gripped, its world-frame yaw is locked to the
+    gripper.  The gripper's world yaw is ``-q1 + q5``.  When the block was
+    picked, its yaw was ``yellow_yaw``, so the relative offset between the
+    gripper's world yaw and the block's yaw is fixed:
+
+        block_world_yaw = gripper_world_yaw = -q1_pick + q5_pick
+
+    At place time (possibly different q1), we want the block's world yaw to
+    equal the red block's yaw modulo 90° (square symmetry).  The gripper
+    world yaw at place time is ``-q1 + q5``, and the block yaw equals
+    ``-q1 + q5 + (yellow_yaw - (-q1_pick + q5_pick))``.
+
+    Since the weld constraint locks the block rigidly to arm_link5 at grasp
+    time, the block's world yaw simply equals ``-q1 + q5 + offset`` where
+    ``offset = yellow_yaw - (-q1_pick + q5_pick)``.  But we don't track
+    q1_pick/q5_pick here.  Instead, we note that after grasping, the block
+    yaw in the world tracks the gripper yaw.  The simplest correct approach:
+    we want the *gripper* world yaw at place time to match the red block's
+    yaw modulo 90°, adjusted by the same offset that was used during pick.
+
+    To keep the interface simple, we compute q5 so that the gripper world
+    yaw ``(-q1 + q5)`` equals ``red_yaw + k*pi/2`` for the k that is closest
+    to ``current_q5``, which preserves the relative block-gripper offset from
+    the pick phase (since the pick alignment already matched the yellow
+    block's face axis).
+
+    Returns the clamped q5 value.
+    """
+    candidates = [_wrap(red_yaw + q1 + k * _PI / 2) for k in range(4)]
+    valid = [c for c in candidates
+             if J_LO[4] + _MARGIN <= c <= J_HI[4] - _MARGIN]
+    if not valid:
+        valid = candidates
+    q5 = _best_90deg_candidate(current_q5, valid)
     q5 = max(J_LO[4] + _MARGIN, min(J_HI[4] - _MARGIN, q5))
     return q5

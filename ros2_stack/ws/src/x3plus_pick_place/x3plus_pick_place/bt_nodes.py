@@ -23,8 +23,10 @@ import py_trees
 from x3plus_pick_place.ik_solver import (
     compute_base_yaw,
     cartesian_to_sagittal,
+    solve_orthogonal_planar_ik,
     solve_planar_ik,
     compute_wrist_roll,
+    compute_place_wrist_roll,
 )
 
 if TYPE_CHECKING:
@@ -80,6 +82,8 @@ class WaitForBlockPoses(py_trees.behaviour.Behaviour):
 
     def update(self) -> py_trees.common.Status:
         if self.ctx.yellow.received and self.ctx.red.received:
+            if self.ctx.yellow_rest_pos is None:
+                self.ctx.yellow_rest_pos = self.ctx.yellow.position.copy()
             self.logger.info("Both block poses received")
             return py_trees.common.Status.SUCCESS
         return py_trees.common.Status.RUNNING
@@ -244,12 +248,14 @@ class MoveAboveBlock(py_trees.behaviour.Behaviour):
         height_offset: float,
         config: dict,
         stack_on_top: bool = False,
+        use_rest_position: bool = False,
     ):
         super().__init__(name)
         self._block_name = block_name
         self._height_offset = height_offset
         self._config = config
         self._stack_on_top = stack_on_top
+        self._use_rest_position = use_rest_position
         self._started = False
 
     def setup(self, **kwargs):
@@ -261,7 +267,10 @@ class MoveAboveBlock(py_trees.behaviour.Behaviour):
     def update(self) -> py_trees.common.Status:
         if not self._started:
             self._started = True
-            block = self.ctx.get_block(self._block_name)
+            if self._use_rest_position and self._block_name == "yellow":
+                block_pos = self.ctx.yellow_rest_pos
+            else:
+                block_pos = self.ctx.get_block(self._block_name).position
             q1 = self.ctx.get_arm_joints()[0]
 
             yellow_hh = self._config["blocks"]["yellow"]["half_height"]
@@ -272,18 +281,25 @@ class MoveAboveBlock(py_trees.behaviour.Behaviour):
                 pick_hh, place_hh = yellow_hh, yellow_hh
 
             ee_z = _compute_ee_z(
-                block.position[2],
+                block_pos[2],
                 self._height_offset,
                 self._config,
                 stack_on_top=self._stack_on_top,
                 pick_block_half_h=pick_hh,
                 place_block_half_h=place_hh,
             )
-            target_xyz = [block.position[0], block.position[1], ee_z]
+            target_xyz = [block_pos[0], block_pos[1], ee_z]
             S, Z = cartesian_to_sagittal(target_xyz, q1)
 
             current_q234 = self.ctx.get_arm_joints()[1:4]
-            sol = solve_planar_ik(S, Z, alpha=None, current_q234=current_q234)
+            sol = solve_orthogonal_planar_ik(S, Z, current_q234=current_q234)
+            if sol is None:
+                sol = solve_planar_ik(S, Z, current_q234=current_q234)
+                if sol is not None:
+                    self.logger.warning(
+                        f"Orth IK failed for {self._block_name}; "
+                        f"using general planar IK"
+                    )
             if sol is None:
                 self.logger.error(
                     f"Planar IK failed for {self._block_name} "
@@ -302,11 +318,19 @@ class MoveAboveBlock(py_trees.behaviour.Behaviour):
 
 
 class AlignWristToBlock(py_trees.behaviour.Behaviour):
-    """Rotate arm_joint5 to match a block's yaw orientation."""
+    """Rotate arm_joint5 to align the gripper with a block's orientation.
 
-    def __init__(self, name: str, block_name: str):
+    *align_to*: when set to another block name, computes q5 so that the
+    currently-held block (picked with its own yaw) will land with its local
+    frame aligned to *align_to*'s local frame (modulo 90° square symmetry).
+    When ``None`` (default / pick phase), q5 is chosen so the gripper's inner
+    faces are parallel to the target block's vertical faces.
+    """
+
+    def __init__(self, name: str, block_name: str, align_to: str | None = None):
         super().__init__(name)
         self._block_name = block_name
+        self._align_to = align_to
         self._started = False
 
     def setup(self, **kwargs):
@@ -320,11 +344,25 @@ class AlignWristToBlock(py_trees.behaviour.Behaviour):
             self._started = True
             block = self.ctx.get_block(self._block_name)
             q1 = self.ctx.get_arm_joints()[0]
-            q5 = compute_wrist_roll(block.yaw, q1)
-            self.logger.info(
-                f"AlignWrist to {self._block_name}: "
-                f"block_yaw={block.yaw:.3f} q1={q1:.3f} → q5={q5:.3f}"
-            )
+            current_q5 = self.ctx.get_arm_joints()[4]
+
+            if self._align_to is not None:
+                target_block = self.ctx.get_block(self._align_to)
+                q5 = compute_place_wrist_roll(
+                    block.yaw, target_block.yaw, q1, current_q5,
+                )
+                self.logger.info(
+                    f"AlignWrist(place) {self._block_name}→{self._align_to}: "
+                    f"yellow_yaw={block.yaw:.3f} red_yaw={target_block.yaw:.3f} "
+                    f"q1={q1:.3f} → q5={q5:.3f}"
+                )
+            else:
+                q5 = compute_wrist_roll(block.yaw, q1)
+                self.logger.info(
+                    f"AlignWrist(grasp) to {self._block_name}: "
+                    f"block_yaw={block.yaw:.3f} q1={q1:.3f} → q5={q5:.3f}"
+                )
+
             if self.ctx.align_wrist(q5):
                 return py_trees.common.Status.SUCCESS
             return py_trees.common.Status.FAILURE
@@ -334,26 +372,24 @@ class AlignWristToBlock(py_trees.behaviour.Behaviour):
 # ── Verification nodes ───────────────────────────────────────────────────────
 
 class VerifyGrasp(py_trees.behaviour.Behaviour):
-    """Verify the yellow block Z is elevated after lifting."""
+    """Verify the yellow block Z is elevated above its resting height."""
 
     def __init__(self, name: str = "VerifyGrasp"):
         super().__init__(name)
         self._start_time: float | None = None
-        self._initial_z: float | None = None
 
     def setup(self, **kwargs):
         self.ctx: PickPlaceContext = _bb_ctx(self)
 
     def initialise(self):
         self._start_time = time.time()
-        block = self.ctx.yellow
-        self._initial_z = block.position[2] if block.position is not None else None
 
     def update(self) -> py_trees.common.Status:
         block = self.ctx.yellow
+        rest_pos = self.ctx.yellow_rest_pos
         lift_h = self.ctx.config["movement"]["lift_height"]
-        if block.position is not None and self._initial_z is not None:
-            lifted = block.position[2] - self._initial_z
+        if block.position is not None and rest_pos is not None:
+            lifted = block.position[2] - rest_pos[2]
             min_lift = lift_h * 0.3
             if lifted >= min_lift:
                 self.logger.info(
@@ -361,8 +397,8 @@ class VerifyGrasp(py_trees.behaviour.Behaviour):
                 )
                 return py_trees.common.Status.SUCCESS
         if time.time() - self._start_time > 2.0:
-            if block.position is not None and self._initial_z is not None:
-                lifted = block.position[2] - self._initial_z
+            if block.position is not None and rest_pos is not None:
+                lifted = block.position[2] - rest_pos[2]
                 self.logger.error(
                     f"Grasp FAILED: lifted {lifted*1000:.1f}mm"
                 )
@@ -459,13 +495,16 @@ def _build_node(step: dict, config: dict, idx: int) -> py_trees.behaviour.Behavi
     if action in ("move_above_block", "lift_block", "retreat_above_block"):
         height_offset = _resolve_height(step, config)
         stack_on_top = step.get("stack_on_top", False)
+        use_rest = (action == "lift_block")
         return MoveAboveBlock(
             label, block_name, height_offset, config,
             stack_on_top=stack_on_top,
+            use_rest_position=use_rest,
         )
 
     if action == "align_wrist_to_block":
-        return AlignWristToBlock(label, block_name)
+        align_to = step.get("align_to", None)
+        return AlignWristToBlock(label, block_name, align_to=align_to)
 
     raise ValueError(f"Unknown BT action: {action}")
 

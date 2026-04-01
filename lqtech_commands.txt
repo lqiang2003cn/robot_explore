@@ -1,2 +1,3 @@
-cd vla_x3plus
-./run_pick_place.sh    
+./vla_x3plus/run_pick_place.sh    
+
+vla_x3plus/output/bt_pick_place.mp4

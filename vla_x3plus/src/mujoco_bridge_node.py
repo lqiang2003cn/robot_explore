@@ -32,13 +32,23 @@ import yaml
 
 import rclpy
 from rclpy.node import Node
-from rclpy.executors import SingleThreadedExecutor
+from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 from sensor_msgs.msg import JointState, Image
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool
 
 COMPONENT_DIR = pathlib.Path(__file__).resolve().parent.parent
+REPO_ROOT = COMPONENT_DIR.parent
+PICK_PLACE_CONFIG_PATH = (
+    REPO_ROOT
+    / "ros2_stack/ws/src/x3plus_pick_place/config/pick_place_tree.yaml"
+)
+
+try:
+    from x3plus_pick_place.ik_solver import is_in_orth_workspace
+except ImportError:
+    is_in_orth_workspace = None
 
 ACTUATOR_JOINT_NAMES = [
     "arm_joint1", "arm_joint2", "arm_joint3",
@@ -56,9 +66,14 @@ TABLE_TOP_Z = 0.37
 BLOCK_HALF_H = 0.014
 BLOCK_ON_TABLE_Z = TABLE_TOP_Z + BLOCK_HALF_H
 
-BLOCK_X_RANGE = (0.05, 0.22)
-BLOCK_Y_RANGE = (-0.15, 0.15)
+# Keep randomized placements away from the base where the current
+# X3Plus MoveIt collision model becomes overly conservative.
+BLOCK_X_RANGE = (0.14, 0.22)
+BLOCK_Y_RANGE = (-0.12, 0.12)
 BLOCK_MIN_SEPARATION = 0.06
+ORTH_WORKSPACE_DEMO_YELLOW_BASE = np.array([0.237, -0.070, -0.067])
+ORTH_WORKSPACE_DEMO_RED_BASE = np.array([0.238, 0.072, -0.067])
+ORTH_WORKSPACE_DEMO_YAWS = (1.23, -2.70)
 
 
 def _yaw_to_quat(yaw: float) -> np.ndarray:
@@ -66,25 +81,136 @@ def _yaw_to_quat(yaw: float) -> np.ndarray:
     return np.array([math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)])
 
 
+def _load_pick_place_config() -> dict:
+    with open(PICK_PLACE_CONFIG_PATH) as f:
+        return yaml.safe_load(f)
+
+
+def _compute_ee_z(
+    block_z: float,
+    height_offset: float,
+    config: dict,
+    stack_on_top: bool = False,
+    pick_block_half_h: float = 0.0,
+    place_block_half_h: float = 0.0,
+) -> float:
+    finger_offset = float(config["robot"]["finger_ee_offset_z"])
+    if stack_on_top:
+        target_surface_z = block_z + place_block_half_h + pick_block_half_h
+        return target_surface_z - finger_offset + height_offset
+    return block_z - finger_offset + height_offset
+
+
+def _yellow_pick_targets(block_base_pos: np.ndarray, config: dict) -> list[np.ndarray]:
+    movement = config["movement"]
+    z = float(block_base_pos[2])
+    height_offsets = [0.0, float(movement["approach_height"]), float(movement["lift_height"])]
+    return [
+        np.array([
+            float(block_base_pos[0]),
+            float(block_base_pos[1]),
+            _compute_ee_z(z, height_offset, config),
+        ])
+        for height_offset in height_offsets
+    ]
+
+
+def _red_place_targets(block_base_pos: np.ndarray, config: dict) -> list[np.ndarray]:
+    movement = config["movement"]
+    blocks = config["blocks"]
+    z = float(block_base_pos[2])
+    height_offsets = [0.0, float(movement["approach_height"])]
+    yellow_hh = float(blocks["yellow"]["half_height"])
+    red_hh = float(blocks["red"]["half_height"])
+    return [
+        np.array([
+            float(block_base_pos[0]),
+            float(block_base_pos[1]),
+            _compute_ee_z(
+                z,
+                height_offset,
+                config,
+                stack_on_top=True,
+                pick_block_half_h=yellow_hh,
+                place_block_half_h=red_hh,
+            ),
+        ])
+        for height_offset in height_offsets
+    ]
+
+
+def _targets_in_orth_workspace(targets: list[np.ndarray]) -> bool:
+    if is_in_orth_workspace is None:
+        raise RuntimeError(
+            "orth_workspace filtering requires the x3plus_pick_place package. "
+            "Source /opt/ros/jazzy/setup.bash and ros2_stack/ws/install/setup.bash first."
+        )
+    return all(is_in_orth_workspace(target) for target in targets)
+
+
 def _randomize_block_poses(
     rng: np.random.Generator,
     x_range: tuple[float, float] = BLOCK_X_RANGE,
     y_range: tuple[float, float] = BLOCK_Y_RANGE,
     min_sep: float = BLOCK_MIN_SEPARATION,
+    base_link_pos: np.ndarray | None = None,
+    pick_place_config: dict | None = None,
+    orth_workspace_only: bool = False,
 ) -> tuple[np.ndarray, float, np.ndarray, float]:
     """Return (yellow_pos, yellow_yaw, red_pos, red_yaw) in world frame."""
-    for _ in range(200):
+    if orth_workspace_only:
+        if base_link_pos is None or pick_place_config is None:
+            raise ValueError(
+                "orth_workspace_only requires base_link_pos and pick_place_config"
+            )
+        yellow_base = ORTH_WORKSPACE_DEMO_YELLOW_BASE.copy()
+        red_base = ORTH_WORKSPACE_DEMO_RED_BASE.copy()
+        if (
+            math.hypot(
+                float(yellow_base[0] - red_base[0]),
+                float(yellow_base[1] - red_base[1]),
+            ) >= min_sep
+            and _targets_in_orth_workspace(
+                _yellow_pick_targets(yellow_base, pick_place_config)
+            )
+            and _targets_in_orth_workspace(
+                _red_place_targets(red_base, pick_place_config)
+            )
+        ):
+            yellow_pos = base_link_pos + yellow_base
+            red_pos = base_link_pos + red_base
+            return (
+                yellow_pos,
+                ORTH_WORKSPACE_DEMO_YAWS[0],
+                red_pos,
+                ORTH_WORKSPACE_DEMO_YAWS[1],
+            )
+
+    for _ in range(1000):
         yx = rng.uniform(x_range[0], x_range[1])
         yy = rng.uniform(y_range[0], y_range[1])
         rx = rng.uniform(x_range[0], x_range[1])
         ry = rng.uniform(y_range[0], y_range[1])
         if math.hypot(yx - rx, yy - ry) >= min_sep:
+            yellow_pos = np.array([yx, yy, BLOCK_ON_TABLE_Z])
+            red_pos = np.array([rx, ry, BLOCK_ON_TABLE_Z])
+            if orth_workspace_only:
+                yellow_base = yellow_pos - base_link_pos
+                red_base = red_pos - base_link_pos
+                if not _targets_in_orth_workspace(
+                    _yellow_pick_targets(yellow_base, pick_place_config)
+                ):
+                    continue
+                if not _targets_in_orth_workspace(
+                    _red_place_targets(red_base, pick_place_config)
+                ):
+                    continue
             y_yaw = rng.uniform(-math.pi, math.pi)
             r_yaw = rng.uniform(-math.pi, math.pi)
             return (
-                np.array([yx, yy, BLOCK_ON_TABLE_Z]),
+                yellow_pos,
                 y_yaw,
-                np.array([rx, ry, BLOCK_ON_TABLE_Z]),
+                red_pos,
                 r_yaw,
             )
     raise RuntimeError("Could not place two blocks with sufficient separation")
@@ -99,6 +225,7 @@ class MuJoCoBridgeNode(Node):
         record_video: str | None = None,
         video_fps: int = 30,
         seed: int | None = None,
+        orth_workspace_only: bool = False,
     ):
         super().__init__("mujoco_bridge")
 
@@ -153,14 +280,27 @@ class MuJoCoBridgeNode(Node):
         if init_key_id >= 0:
             mujoco.mj_resetDataKeyframe(self._model, self._data, init_key_id)
 
+        mujoco.mj_forward(self._model, self._data)
+        self._base_link_pos = self._data.body("base_link").xpos.copy()
+
         rng = np.random.default_rng(seed)
-        y_pos, y_yaw, r_pos, r_yaw = _randomize_block_poses(rng)
+        pick_place_config = _load_pick_place_config() if orth_workspace_only else None
+        y_pos, y_yaw, r_pos, r_yaw = _randomize_block_poses(
+            rng,
+            base_link_pos=self._base_link_pos,
+            pick_place_config=pick_place_config,
+            orth_workspace_only=orth_workspace_only,
+        )
         self._set_block_qpos(self._yellow_qpos_adr, y_pos, y_yaw)
         self._set_block_qpos(self._red_qpos_adr, r_pos, r_yaw)
 
-        mujoco.mj_forward(self._model, self._data)
+        # Start with gripper open so the weld constraint doesn't attach
+        # during the ros2_control startup delay (ctrl must be <= _detach_ctrl
+        # for the weld to stay off).
+        _GRIPPER_OPEN_CTRL = -1.54
+        self._data.ctrl[self._actuator_ctrl_idx["grip_joint"]] = _GRIPPER_OPEN_CTRL
 
-        self._base_link_pos = self._data.body("base_link").xpos.copy()
+        mujoco.mj_forward(self._model, self._data)
 
         weld_id = mujoco.mj_name2id(
             self._model, mujoco.mjtObj.mjOBJ_EQUALITY, "yellow_weld",
@@ -168,7 +308,7 @@ class MuJoCoBridgeNode(Node):
         self._weld_eq_id = weld_id
         self._grip_attached = False
         self._grip_ctrl_idx = self._actuator_ctrl_idx["grip_joint"]
-        self._attach_dist = 0.10
+        self._attach_dist = 0.05
         self._detach_ctrl = -0.5
 
         self._lock = threading.Lock()
@@ -196,6 +336,8 @@ class MuJoCoBridgeNode(Node):
 
         if self._recording:
             self.get_logger().info(f"Video recording enabled -> {record_video}")
+        if orth_workspace_only:
+            self.get_logger().info("Constraining block spawn to orth_workspace")
 
         y_base = y_pos - self._base_link_pos
         r_base = r_pos - self._base_link_pos
@@ -269,7 +411,8 @@ class MuJoCoBridgeNode(Node):
         )
         self._video_frames.clear()
         self.get_logger().info(f"Video saved: {path}")
-        raise SystemExit(0)
+        # Exit the executor cleanly once the recording is flushed to disk.
+        rclpy.try_shutdown()
 
     _SIM_SUBSTEPS = 20
 
@@ -405,6 +548,11 @@ def main() -> None:
                         default=sim_cfg.get("video_fps", 30))
     parser.add_argument("--seed", type=int, default=None,
                         help="Random seed for block placement (None = random)")
+    parser.add_argument(
+        "--orth-workspace-only",
+        action="store_true",
+        help="Spawn both blocks only at positions reachable with fixed top-down grasping",
+    )
     args = parser.parse_args()
 
     rclpy.init()
@@ -415,17 +563,18 @@ def main() -> None:
         record_video=args.record_video,
         video_fps=args.video_fps,
         seed=args.seed,
+        orth_workspace_only=args.orth_workspace_only,
     )
 
     executor = SingleThreadedExecutor()
     executor.add_node(node)
     try:
         executor.spin()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

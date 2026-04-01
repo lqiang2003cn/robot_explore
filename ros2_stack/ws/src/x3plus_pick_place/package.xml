@@ -11,6 +11,16 @@
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>ament_index_python</depend>
+  <depend>controller_manager</depend>
+  <depend>forward_command_controller</depend>
+  <depend>joint_state_broadcaster</depend>
+  <depend>joint_trajectory_controller</depend>
+  <depend>moveit_msgs</depend>
+  <depend>moveit_ros_move_group</depend>
+  <depend>py_trees</depend>
+  <depend>robot_state_publisher</depend>
+  <depend>tf2_ros</depend>
   <depend>x3plus_description</depend>
 
   <buildtool_depend>ament_python</buildtool_depend>

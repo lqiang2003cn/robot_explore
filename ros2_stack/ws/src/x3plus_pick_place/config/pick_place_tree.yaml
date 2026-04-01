@@ -7,8 +7,8 @@
 #   grip_joint       → open / close
 
 robot:
-  # Init pose: gripper pointing straight down (q2+q3+q4 ≈ π)
-  init_joints: [0.0, 0.52, 1.05, 1.57, 0.0]
+  # Init pose: zeroed arm posture that matches the simulator startup state.
+  init_joints: [0.0, 0.0, 0.0, 0.0, 0.0]
   gripper_open: -1.54
   gripper_closed: 0.0
   gripper_close_threshold: -0.35
@@ -58,7 +58,8 @@ tree:
     height_offset: approach_height
     stack_on_top: true
   - action: align_wrist_to_block
-    block: red
+    block: yellow
+    align_to: red
   - action: move_above_block
     block: red
     height_offset: 0
